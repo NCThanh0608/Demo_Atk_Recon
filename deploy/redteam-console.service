@@ -1,0 +1,21 @@
+[Unit]
+Description=Red Team Ops Console (static web console, Raspberry Pi AP mode)
+Documentation=file:/home/pi/demo_atk_recon/WEB.MD
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/demo_atk_recon/frontend
+# Serve the static frontend on all interfaces (reachable via the Pi AP, e.g. http://10.42.0.1:8080)
+ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0
+Restart=on-failure
+RestartSec=3
+# Light hardening (static file server only)
+NoNewPrivileges=yes
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
