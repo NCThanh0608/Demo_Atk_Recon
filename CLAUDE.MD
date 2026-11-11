@@ -86,5 +86,9 @@ Chưa có backend → frontend tự chạy **MOCK mode** (dữ liệu giả lậ
 - [x] Frontend 4 công tắc on/off + 2 ô nhập (dải quét, IP mục tiêu) + console telemetry.
 - [x] Mock mode để demo khi chưa có backend.
 - [x] `WEB.MD` đặc tả bản tin điều khiển.
-- [ ] Backend trên Pi (đang làm) — theo `WEB.MD §8`.
-- [ ] Nối live (health → live tự động).
+- [x] Backend trên Pi (`backend/server.py`, thuần stdlib) — static + `/api/*` + WS `/api/stream`.
+- [x] **scan_ip** và **scan_port** chạy thật bằng `nmap` (recon), stream telemetry, ghi `logs/session.ndjson`.
+- [x] **brute** chạy thật: SSH dùng OpenSSH client + `sshpass` (tương thích Dropbear router, có nhận biết lockout); dịch vụ khác dùng `hydra`. Wordlist `backend/wordlists/`.
+- [x] Nối live (health → live tự động); scope RFC1918 chặn server-side cho mọi module.
+- [x] **dos** — hping3 ICMP flood ≈2000 pps (`-i u500`), RFC1918-scoped, stop flag kill subprocess.
+- Ghi chú: nmap cấp `CAP_NET_RAW` qua systemd + cờ `--privileged` để có MAC/vendor (ARP). hydra ssh dùng `-t 1` vì OpenSSH mới chặn kết nối song song.

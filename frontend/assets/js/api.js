@@ -25,7 +25,10 @@ function envelope(moduleId, action, params) {
 
 /* ------------------------------------------------------------------ Live */
 class LiveClient {
-  constructor() { this.mode = 'live'; this._listeners = new Set(); this._ws = null; }
+  constructor() {
+    this.mode = 'live'; this._listeners = new Set(); this._ws = null;
+    this._backoff = 1000; this._stopped = false; this._retryT = null;
+  }
 
   async _post(path, body) {
     const res = await fetch(CONFIG.apiBase + path, {
@@ -41,26 +44,66 @@ class LiveClient {
   }
 
   start(moduleId, params) { return this._post(`/ops/${moduleId}/start`, envelope(moduleId, 'start', params)); }
-  stop(moduleId)          { return this._post(`/ops/${moduleId}/stop`,  envelope(moduleId, 'stop',  {})); }
+  stop(moduleId) { return this._post(`/ops/${moduleId}/stop`, envelope(moduleId, 'stop', {})); }
+
+  // Emergency stop: kill every running job (WEB.MD §3.2 — body is {request_id, ts}).
+  stopAll() {
+    return this._post('/ops/stop_all', {
+      request_id: (crypto?.randomUUID?.() || String(Date.now()) + '-' + Math.random().toString(16).slice(2)),
+      ts: Math.floor(Date.now() / 1000),
+    });
+  }
 
   async status() {
     const res = await fetch(CONFIG.apiBase + '/status');
+    if (!res.ok) throw { code: 'http_' + res.status, message: res.statusText };
     return res.json();
   }
 
   onEvent(cb) { this._listeners.add(cb); return () => this._listeners.delete(cb); }
 
+  _emit(msg) { this._listeners.forEach(cb => cb(msg)); }
+
   connectStream() {
     // Telemetry pushed by the Pi: log / result / status messages. See WEB.MD §Telemetry.
+    // Auto-reconnects with exponential backoff so telemetry survives a dropped AP link.
     const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + CONFIG.streamPath;
-    try {
-      this._ws = new WebSocket(url);
-      this._ws.onmessage = (e) => {
-        let msg; try { msg = JSON.parse(e.data); } catch { return; }
-        this._listeners.forEach(cb => cb(msg));
-      };
-      this._ws.onclose = () => { this._listeners.forEach(cb => cb({ type: 'status', module: '_conn', state: 'down' })); };
-    } catch { /* telemetry optional; control still works over REST */ }
+    const open = () => {
+      if (this._stopped) return;
+      try {
+        this._ws = new WebSocket(url);
+        this._ws.onopen = () => {
+          this._backoff = 1000;                                   // reset backoff on success
+          this._emit({ type: 'status', module: '_conn', state: 'up' });
+        };
+        this._ws.onmessage = (e) => {
+          let msg; try { msg = JSON.parse(e.data); } catch { return; }
+          this._emit(msg);
+        };
+        this._ws.onerror = () => { try { this._ws.close(); } catch { /* noop */ } };
+        this._ws.onclose = () => {
+          this._emit({ type: 'status', module: '_conn', state: 'down' });
+          this._scheduleReconnect(open);
+        };
+      } catch {
+        this._scheduleReconnect(open);
+      }
+    };
+    open();
+  }
+
+  _scheduleReconnect(open) {
+    if (this._stopped) return;
+    clearTimeout(this._retryT);
+    const delay = this._backoff;
+    this._backoff = Math.min(delay * 2, 15000);                   // 1s → 2s → … → 15s cap
+    this._retryT = setTimeout(open, delay);
+  }
+
+  disconnect() {
+    this._stopped = true;
+    clearTimeout(this._retryT);
+    try { this._ws?.close(); } catch { /* noop */ }
   }
 }
 
@@ -68,28 +111,28 @@ class LiveClient {
 // Scripted output per module so the demo looks alive without a backend.
 const SCRIPT = {
   scan_ip: (p) => [
-    ['in',  `arp-scan ${p.scan_range}`],
-    ['ok',  `6 host phản hồi · 248 im lặng`],
-    ['in',  `phân giải vendor (OUI)… xong`],
-    ['done','6 host sống · 2 camera'],
+    ['in', `arp-scan ${p.scan_range}`],
+    ['ok', `6 host phản hồi · 248 im lặng`],
+    ['in', `phân giải vendor (OUI)… xong`],
+    ['done', '6 host sống · 2 camera'],
   ],
   scan_port: (p) => [
-    ['in',  `tcp connect ${p.target} · top-1000`],
-    ['ok',  `554/rtsp · 80/http · 3306/mysql mở`],
-    ['warn','8080 filtered'],
-    ['done','554 rtsp · 80 http · +1 mở'],
+    ['in', `tcp connect ${p.target} · top-1000`],
+    ['ok', `554/rtsp · 80/http · 3306/mysql mở`],
+    ['warn', '8080 filtered'],
+    ['done', '554 rtsp · 80 http · +1 mở'],
   ],
   brute: (p) => [
-    ['in',  `ssh ${p.target} · wordlist 1k`],
+    ['in', `ssh ${p.target} · wordlist 1k`],
     ['err', `admin:123456 · admin:password sai`],
-    ['ok',  `admin:sunshine2024 — ĐĂNG NHẬP OK`],
-    ['done','admin:sunshine2024 ✓'],
+    ['ok', `admin:sunshine2024 — ĐĂNG NHẬP OK`],
+    ['done', 'admin:sunshine2024 ✓'],
   ],
   dos: (p) => [
-    ['in',  `conn-exhaust + syn-flood ${p.target}:554`],
-    ['warn',`probe rtsp 120ms → 480ms`],
+    ['in', `conn-exhaust + syn-flood ${p.target}:554`],
+    ['warn', `probe rtsp 120ms → 480ms`],
     ['err', `UNAVAILABLE (2/2) — camera offline`],
-    ['done','RTSP UNAVAILABLE'],
+    ['done', 'RTSP UNAVAILABLE'],
   ],
 };
 
@@ -109,6 +152,36 @@ class MockClient {
       }, 250 + i * 550);
       this._timers[moduleId].push(id);
     });
+    // scan_ip also emits a structured result so the victim dropdown populates in mock mode.
+    if (moduleId === 'scan_ip') {
+      const base = (String(params.scan_range || '192.168.1.0').match(/^(\d+\.\d+\.\d+)\./) || [, '192.168.1'])[1];
+      const hosts = [
+        { ip: `${base}.1`, hostname: 'gateway', mac: 'C4:2C:7B:6A:3C:28', vendor: 'TP-Link', rtt_ms: 1 },
+        { ip: `${base}.30`, hostname: 'cam-01', mac: 'AC:CC:8E:12:34:56', vendor: 'Axis', rtt_ms: 4 },
+        { ip: `${base}.42`, hostname: 'nvr', mac: '00:1A:2B:AA:BB:CC', vendor: 'Hikvision', rtt_ms: 6 },
+      ];
+      const id = setTimeout(() => this._emit({ type: 'result', module: 'scan_ip', data: { hosts } }),
+                            250 + steps.length * 550);
+      this._timers[moduleId].push(id);
+    }
+    if (moduleId === 'scan_port') {
+      const open_ports = [
+        { port: 554, proto: 'tcp', service: 'rtsp', version: '' },
+        { port: 80, proto: 'tcp', service: 'http', version: 'nginx 1.24' },
+        { port: 3306, proto: 'tcp', service: 'mysql', version: '' },
+      ];
+      const id = setTimeout(() => this._emit({
+        type: 'result', module: 'scan_port', data: { target: params.target, open_ports },
+      }), 250 + steps.length * 550);
+      this._timers[moduleId].push(id);
+    }
+    if (moduleId === 'brute') {
+      const found = [{ service: 'ssh', username: 'admin', password: 'sunshine2024' }];
+      const id = setTimeout(() => this._emit({
+        type: 'result', module: 'brute', data: { target: params.target, service: 'ssh', found },
+      }), 250 + steps.length * 550);
+      this._timers[moduleId].push(id);
+    }
     return { request_id: 'mock', accepted: true, module: moduleId, state: 'running', job_id: 'mock-' + moduleId };
   }
 
@@ -119,8 +192,18 @@ class MockClient {
     return { request_id: 'mock', accepted: true, module: moduleId, state: 'idle' };
   }
 
+  async stopAll() {
+    Object.keys(this._timers).forEach(moduleId => {
+      (this._timers[moduleId] || []).forEach(clearTimeout);
+      this._timers[moduleId] = [];
+      this._emit({ type: 'status', module: moduleId, state: 'idle', summary: 'Idle' });
+    });
+    return { request_id: 'mock', accepted: true };
+  }
+
   async status() { return { modules: {}, config: {} }; }
   connectStream() { /* mock pushes events inline from start()/stop() */ }
+  disconnect() { /* no persistent connection in mock */ }
 }
 
 /* --------------------------------------------------------------- Factory */

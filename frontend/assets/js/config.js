@@ -48,3 +48,13 @@ export function isPrivateIPv4(ip) {
       || (o[0] === 172 && o[1] >= 16 && o[1] <= 31)
       || (o[0] === 192 && o[1] === 168);
 }
+
+// Validate the scan range field: a bare IPv4 or an IPv4 CIDR (e.g. 192.168.1.0/24).
+// Client-side UX hint only; backend still returns `invalid_target` on bad input (WEB.MD §3.4).
+export function isIPv4OrCIDRv4(s) {
+  const m = String(s).trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/);
+  if (!m) return false;
+  if ([m[1], m[2], m[3], m[4]].map(Number).some(x => x > 255)) return false;
+  if (m[5] != null && Number(m[5]) > 32) return false;
+  return true;
+}

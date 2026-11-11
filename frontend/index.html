@@ -36,10 +36,16 @@
         <div class="fld">
           <label for="range"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/></svg>Dải IP quét</label>
           <input class="inp" id="range" value="192.168.1.0/24" spellcheck="false" autocomplete="off">
+          <span class="fld-err" id="range-err" hidden>Dải không hợp lệ — dùng IPv4 hoặc CIDR (vd 192.168.1.0/24).</span>
         </div>
         <div class="fld">
           <label for="victim"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 20h20z"/><path d="M12 9v5m0 3h.01"/></svg>IP mục tiêu (nạn nhân)</label>
-          <input class="inp" id="victim" value="192.168.1.30" spellcheck="false" autocomplete="off">
+          <div class="combo" id="victim-combo">
+            <input class="inp" id="victim" placeholder="Chọn IP đã quét hoặc nhập tay…" spellcheck="false" autocomplete="off">
+            <button class="combo-caret" id="victim-caret" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Danh sách IP đã quét">▾</button>
+            <ul class="combo-list" id="victim-list" role="listbox" hidden></ul>
+          </div>
+          <span class="fld-hint" id="victim-hint" hidden></span>
         </div>
       </div>
       <div class="scopebar">
@@ -50,17 +56,27 @@
 
     <div class="mods" id="mods"><!-- module tiles render here --></div>
 
+    <!-- Kết quả quét: bảng IP → cổng mở -->
     <div class="panel">
-      <div class="panel-h"><h3>Nhật ký hoạt động</h3><span class="tag" id="run-tag">0/4 đang chạy</span></div>
-      <div class="console" id="console" aria-live="polite"></div>
+      <div class="panel-h">
+        <h3>Kết quả quét</h3>
+        <span class="tag" id="run-tag">0/4 đang chạy</span>
+        <button class="stop-all" id="stop-all" type="button">■ Dừng tất cả</button>
+        <button class="log-toggle" id="log-toggle" type="button" aria-expanded="false" aria-controls="log-panel">⌄ Nhật ký</button>
+      </div>
+      <div class="results">
+        <table class="rtable">
+          <thead><tr><th>IP</th><th>Cổng mở — port · giao thức</th><th>User / Pass</th></tr></thead>
+          <tbody id="results-body"></tbody>
+        </table>
+        <div class="results-empty" id="results-empty">Chưa có dữ liệu — chạy <b>Scan IP</b> để liệt kê host, rồi <b>Scan Port</b> cho từng IP.</div>
+      </div>
     </div>
 
-    <div class="statusbar">
-      <span class="demo-flag" id="mode-flag">● Demo</span>
-      <span>Engagement: <span class="mono">VQEC-RT-01</span></span>
-      <span>Backend: <span class="mono" id="backend-url">/api</span></span>
-      <span>Log: <span class="mono">./logs/session.ndjson</span></span>
-      <span style="margin-left:auto">Red Team Ops Console</span>
+    <!-- Nhật ký hoạt động: ẩn mặc định, chỉ bật để debug/RD -->
+    <div class="panel" id="log-panel" hidden>
+      <div class="panel-h"><h3>Nhật ký hoạt động</h3></div>
+      <div class="console" id="console" aria-live="polite"></div>
     </div>
   </div>
 
