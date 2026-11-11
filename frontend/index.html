@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Red Team Ops Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6 4"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg>
+      </span>
+      <div>
+        <h1>Red Team Ops Console</h1>
+        <div class="sub">Offensive Operations</div>
+      </div>
+    </div>
+    <span class="chip" id="conn"><span class="dot" style="background:var(--faint)"></span>Đang kết nối…</span>
+    <span class="chip">Scope: <span class="mono">RFC1918</span></span>
+    <button class="theme-btn" id="theme" type="button">◐ Theme</button>
+  </header>
+
+  <div class="shell">
+    <div class="auth">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M12 8v4m0 3h.01"/></svg>
+      <span><b>Engagement VQEC-RT-01.</b> Cho phép mọi dải nội bộ (RFC1918). Mục tiêu là IP công cộng sẽ khóa chức năng tấn công.</span>
+    </div>
+
+    <div class="target">
+      <div class="target-grid">
+        <div class="fld">
+          <label for="range"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/></svg>Dải IP quét</label>
+          <input class="inp" id="range" value="192.168.1.0/24" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="fld">
+          <label for="victim"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 20h20z"/><path d="M12 9v5m0 3h.01"/></svg>IP mục tiêu (nạn nhân)</label>
+          <input class="inp" id="victim" value="192.168.1.30" spellcheck="false" autocomplete="off">
+        </div>
+      </div>
+      <div class="scopebar">
+        <span class="badge ok" id="scope-badge"></span>
+        <span class="note" id="scope-note"></span>
+      </div>
+    </div>
+
+    <div class="mods" id="mods"><!-- module tiles render here --></div>
+
+    <div class="panel">
+      <div class="panel-h"><h3>Nhật ký hoạt động</h3><span class="tag" id="run-tag">0/4 đang chạy</span></div>
+      <div class="console" id="console" aria-live="polite"></div>
+    </div>
+
+    <div class="statusbar">
+      <span class="demo-flag" id="mode-flag">● Demo</span>
+      <span>Engagement: <span class="mono">VQEC-RT-01</span></span>
+      <span>Backend: <span class="mono" id="backend-url">/api</span></span>
+      <span>Log: <span class="mono">./logs/session.ndjson</span></span>
+      <span style="margin-left:auto">Red Team Ops Console</span>
+    </div>
+  </div>
+
+  <script type="module" src="assets/js/app.js"></script>
+</body>
+</html>

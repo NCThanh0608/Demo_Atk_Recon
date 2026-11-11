@@ -1,0 +1,49 @@
+# ---- Logs & runtime data ----
+logs/
+*.ndjson
+*.log
+*.pcap
+session-*.jsonl
+
+# ---- Secrets / local config ----
+.env
+.env.*
+*.local
+backend/scope.local.yaml
+secrets/
+*.key
+*.pem
+
+# ---- Python (backend trên Pi) ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node (nếu sau này thêm tooling cho frontend) ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Wordlists lớn (không commit, tải riêng) ----
+wordlists/
+*.wordlist
+rockyou*.txt
