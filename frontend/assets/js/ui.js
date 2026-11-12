@@ -7,6 +7,28 @@ const el = { mods: $('mods'), console: $('console'), runTag: $('run-tag'),
   conn: $('conn'), modeFlag: $('mode-flag'), scopeBadge: $('scope-badge'), scopeNote: $('scope-note'),
   range: $('range'), rangeErr: $('range-err') };
 
+// Elapsed-time counters: show "đang chạy… Xs" while a module is running.
+// setModuleSummary() stops the counter when the backend sends a better summary.
+const _timers = new Map();
+
+function _stopTimer(id) {
+  const t = _timers.get(id);
+  if (t) { clearInterval(t); _timers.delete(id); }
+}
+
+function _startTimer(id) {
+  _stopTimer(id);
+  const b = el.mods.querySelector(`.mod[data-mod="${id}"]`);
+  const s = b && b.querySelector('[data-stat]');
+  if (!s) return;
+  const t0 = Date.now();
+  _timers.set(id, setInterval(() => {
+    if (!_timers.has(id)) return;
+    const e = Math.floor((Date.now() - t0) / 1000);
+    s.textContent = `đang chạy… ${e}s`;
+  }, 1000));
+}
+
 const ICONS = (cls) => cls === 'ok' ? '✓' : cls === 'err' ? '✗' : cls === 'warn-c' ? '!' : '▸';
 const LEVEL = { info: 'in', ok: 'ok', warn: 'warn-c', error: 'err', err: 'err' };
 const MAX_LOG_LINES = 500;   // cap console DOM so long sessions don't grow unbounded
@@ -33,13 +55,21 @@ export function setModuleState(moduleId, on, summary) {
   if (!b) return;
   b.setAttribute('aria-pressed', on ? 'true' : 'false');
   const s = b.querySelector('[data-stat]');
-  if (summary != null) s.textContent = summary;
-  else if (!on) s.textContent = 'Idle';
+  if (on) {
+    s.textContent = summary != null ? summary : 'đang chạy…';
+    _startTimer(moduleId);
+  } else {
+    _stopTimer(moduleId);
+    s.textContent = summary != null ? summary : 'Idle';
+  }
 }
 
 export function setModuleSummary(moduleId, summary) {
   const b = el.mods.querySelector(`.mod[data-mod="${moduleId}"]`);
-  if (b && b.getAttribute('aria-pressed') === 'true') b.querySelector('[data-stat]').textContent = summary;
+  if (!b || b.getAttribute('aria-pressed') !== 'true') return;
+  // Backend sent a live summary (e.g. DOS "~2000 pkt") — stop local timer, use backend text.
+  _stopTimer(moduleId);
+  b.querySelector('[data-stat]').textContent = summary;
 }
 
 export function setLocked(moduleId, locked) {
