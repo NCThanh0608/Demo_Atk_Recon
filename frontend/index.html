@@ -78,6 +78,25 @@
       <div class="panel-h"><h3>Nhật ký hoạt động</h3></div>
       <div class="console" id="console" aria-live="polite"></div>
     </div>
+
+    <!-- Camera viewer: hiển thị khi bấm "📷 Xem Cam" trong bảng kết quả -->
+    <div class="cam-panel" id="cam-panel" hidden>
+      <div class="cam-hdr">
+        <div class="cam-title-row">
+          <span class="cam-icon" aria-hidden="true">📷</span>
+          <span class="cam-title" id="cam-title">Camera</span>
+          <span class="chip cam-chip" id="cam-chip">đang kết nối…</span>
+        </div>
+        <button class="cam-close" id="cam-close" type="button" aria-label="Đóng camera">✕</button>
+      </div>
+      <div class="cam-body">
+        <img class="cam-img" id="cam-img" src="" alt="Camera feed" draggable="false">
+        <div class="cam-loading" id="cam-loading">
+          <div class="cam-spin"></div>
+          <span>Đang kết nối camera…</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="assets/js/app.js"></script>

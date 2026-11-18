@@ -161,7 +161,7 @@ class MockClient {
         { ip: `${base}.42`, hostname: 'nvr', mac: '00:1A:2B:AA:BB:CC', vendor: 'Hikvision', rtt_ms: 6 },
       ];
       const id = setTimeout(() => this._emit({ type: 'result', module: 'scan_ip', data: { hosts } }),
-                            250 + steps.length * 550);
+        250 + steps.length * 550);
       this._timers[moduleId].push(id);
     }
     if (moduleId === 'scan_port') {

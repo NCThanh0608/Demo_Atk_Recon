@@ -123,9 +123,10 @@ export function isHostListOpen() {
   return !!ul && !ul.hidden;
 }
 
-// Render the IP -> open-ports table. rows: [{ip, hostname, vendor, mac, ports}]
+// Render the IP -> open-ports table. rows: [{ip, hostname, vendor, mac, ports, creds}]
 // ports: null = chưa quét cổng; [] = không có cổng mở; [{port, proto, service, version}]
-export function renderResults(rows, onPickIp) {
+// onCam(ip, user, pass): optional — called when "📷 Xem Cam" is clicked for a row with creds.
+export function renderResults(rows, onPickIp, onCam) {
   const body = document.getElementById('results-body');
   const empty = document.getElementById('results-empty');
   if (!body) return;
@@ -158,8 +159,71 @@ export function renderResults(rows, onPickIp) {
       + (meta ? `<div class="cell-meta">${escapeHtml(meta)}</div>` : '') + '</td>'
       + `<td><div class="cell-ports">${ports}</div></td>`
       + `<td><div class="cell-creds">${creds}</div></td>`;
+    // Add camera viewer button when credentials are available
+    if (onCam && r.creds && r.creds.length) {
+      const c = r.creds[0];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cam-launch';
+      btn.textContent = '📷 Xem Cam';
+      btn.title = `Kết nối camera tại ${r.ip} (${c.username}:${c.password})`;
+      btn.addEventListener('click', (e) => { e.stopPropagation(); onCam(r.ip, c.username, c.password); });
+      tr.querySelector('.cell-creds').appendChild(btn);
+    }
     body.appendChild(tr);
   });
+}
+
+// --- Camera viewer panel ---
+export function showCamPanel(ip, user) {
+  const panel = document.getElementById('cam-panel');
+  const title = document.getElementById('cam-title');
+  const chip  = document.getElementById('cam-chip');
+  const img   = document.getElementById('cam-img');
+  const load  = document.getElementById('cam-loading');
+  if (title) title.textContent = `${ip}  ·  ${user}`;
+  if (chip)  { chip.textContent = 'đang kết nối…'; chip.className = 'chip cam-chip'; }
+  if (img)   img.src = '';
+  if (load)  load.hidden = false;
+  if (panel) { panel.hidden = false; setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50); }
+}
+
+export function hideCamPanel() {
+  const img   = document.getElementById('cam-img');
+  const panel = document.getElementById('cam-panel');
+  if (img)   img.src = '';
+  if (panel) panel.hidden = true;
+}
+
+export function setCamStream(url, label) {
+  const img  = document.getElementById('cam-img');
+  const chip = document.getElementById('cam-chip');
+  const load = document.getElementById('cam-loading');
+  if (!img) return;
+  if (chip) { chip.textContent = `● ${label}`; chip.className = 'chip cam-chip live'; }
+  // onload fires for snapshots; for MJPEG/RTSP streams it may never fire → fallback timeout
+  let loadHidden = false;
+  const hideLoad = () => { if (!loadHidden) { loadHidden = true; if (load) load.hidden = true; } };
+  img.onload  = hideLoad;
+  img.onerror = () => {
+    if (chip) { chip.textContent = 'Không tải được ảnh'; chip.className = 'chip cam-chip down'; }
+    hideLoad();
+  };
+  img.src = url;
+  // For streaming types, hide spinner after 3 s even if onload never fires
+  setTimeout(hideLoad, 3000);
+}
+
+export function refreshCamStream(url) {
+  const img = document.getElementById('cam-img');
+  if (img) img.src = url;
+}
+
+export function setCamStatus(text, type) {
+  const chip = document.getElementById('cam-chip');
+  const load = document.getElementById('cam-loading');
+  if (chip) { chip.textContent = text; chip.className = `chip cam-chip${type === 'error' ? ' down' : ''}`; }
+  if (load) load.hidden = true;
 }
 
 // Small hint under the victim field (e.g. "đang tự quét…" / "N IP sẵn sàng").

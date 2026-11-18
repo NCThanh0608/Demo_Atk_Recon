@@ -13,13 +13,58 @@ let discoveredHosts = [];     // hosts from the latest scan_ip result
 let hostAutoScan = false;     // guard: auto-scan the victim list only once per range
 const results = new Map();    // ip -> {ip, hostname, vendor, mac, ports: null|[]} for the results table
 
+// Camera viewer state
+let _camRefreshTimer = null;
+let _camCtx = null;           // { ip, user, pass, path, type }
+
+async function openCamViewer(ip, user, pass) {
+  if (_camRefreshTimer) { clearInterval(_camRefreshTimer); _camRefreshTimer = null; }
+  ui.showCamPanel(ip, user);
+  ui.log('cam', `mở camera ${ip} (${user}:${pass})`, 'info');
+  try {
+    const r = await fetch(
+      `/api/cam/probe?host=${encodeURIComponent(ip)}&user=${encodeURIComponent(user)}&pass=${encodeURIComponent(pass)}`
+    );
+    const info = await r.json();
+    _camCtx = { ip, user, pass, ...info };
+    if (info.type === 'none') {
+      ui.setCamStatus('Không tìm thấy stream camera tại ' + ip, 'error');
+      ui.log('cam', `không tìm thấy stream tại ${ip}`, 'warn');
+      return;
+    }
+    const mkUrl = (ts) =>
+      `/api/cam/stream?host=${encodeURIComponent(ip)}&user=${encodeURIComponent(user)}&pass=${encodeURIComponent(pass)}&path=${encodeURIComponent(info.path)}&_t=${ts || Date.now()}`;
+    if (info.type === 'mjpeg' || info.type === 'rtsp') {
+      ui.setCamStream(mkUrl(), info.type === 'rtsp' ? 'RTSP → MJPEG live' : 'MJPEG live');
+      ui.log('cam', `${info.type === 'rtsp' ? 'RTSP stream' : 'MJPEG stream'} tại ${ip}`, 'ok');
+    } else if (info.type === 'snapshot') {
+      ui.setCamStream(mkUrl(), 'Snapshot auto-refresh');
+      ui.log('cam', `snapshot tại ${ip}${info.path} — tự làm mới mỗi 1.5s`, 'ok');
+      _camRefreshTimer = setInterval(() => ui.refreshCamStream(mkUrl()), 1500);
+    } else {
+      ui.setCamStatus(`Không hỗ trợ hiển thị inline — thử mở http://${ip} trong tab mới`, 'error');
+      ui.log('cam', `fallback: mở http://${ip} trong trình duyệt`, 'warn');
+    }
+  } catch (e) {
+    ui.setCamStatus('Lỗi kết nối: ' + (e.message || e), 'error');
+    ui.log('cam', `lỗi probe: ${e.message || e}`, 'error');
+  }
+}
+
+function closeCamViewer() {
+  if (_camRefreshTimer) { clearInterval(_camRefreshTimer); _camRefreshTimer = null; }
+  _camCtx = null;
+  ui.hideCamPanel();
+  ui.log('cam', 'đã đóng camera viewer', 'info');
+}
+
 // Merge discovered hosts into the results table (keep any ports already scanned).
 function upsertHosts(hosts) {
   hosts.forEach(h => {
     const cur = results.get(h.ip) || { ip: h.ip, ports: null };
     results.set(h.ip, { ...cur, ip: h.ip, hostname: h.hostname, vendor: h.vendor, mac: h.mac });
   });
-  ui.renderResults([...results.values()], pickHost);
+  ui.renderResults([...results.values()], pickHost, openCamViewer);
 }
 
 // Attach scan_port results to the matching IP row (create the row if new).
@@ -27,7 +72,7 @@ function setPorts(ip, ports) {
   if (!ip) return;
   const cur = results.get(ip) || { ip, ports: null };
   results.set(ip, { ...cur, ip, ports: Array.isArray(ports) ? ports : [] });
-  ui.renderResults([...results.values()], pickHost);
+  ui.renderResults([...results.values()], pickHost, openCamViewer);
 }
 
 // Attach brute-force credentials found for an IP to its row.
@@ -35,7 +80,7 @@ function setCreds(ip, found) {
   if (!ip) return;
   const cur = results.get(ip) || { ip, ports: null };
   results.set(ip, { ...cur, ip, creds: Array.isArray(found) ? found : [] });
-  ui.renderResults([...results.values()], pickHost);
+  ui.renderResults([...results.values()], pickHost, openCamViewer);
 }
 
 const range = () => rangeEl.value.trim();
@@ -262,6 +307,8 @@ async function main() {
   });
   rangeEl.addEventListener('input', onRangeInput);
   document.getElementById('stop-all').addEventListener('click', stopAll);
+
+  document.getElementById('cam-close')?.addEventListener('click', closeCamViewer);
 
   // Activity log is hidden by default; a small button reveals it for debug/RD.
   const logBtn = document.getElementById('log-toggle');

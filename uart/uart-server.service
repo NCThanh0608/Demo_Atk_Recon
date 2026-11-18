@@ -1,0 +1,13 @@
+[Unit]
+Description=Pi UART Command Server
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/bin/python3 /home/pi/demo_atk_recon/pi_uart_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

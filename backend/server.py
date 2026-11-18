@@ -27,7 +27,9 @@ import threading
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from urllib.parse import urlparse
+import urllib.request
+import urllib.error
+from urllib.parse import urlparse, parse_qs
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +45,7 @@ NMAP = os.environ.get("RTOPS_NMAP", "nmap")
 HYDRA = os.environ.get("RTOPS_HYDRA", "hydra")
 WORDLISTS = os.path.join(HERE, "wordlists")
 # Services the brute engine knows how to attack, probed in this order.
-BRUTE_SERVICES = [("ssh", 22), ("ftp", 21), ("telnet", 23), ("mysql", 3306), ("rtsp", 554)]
+BRUTE_SERVICES = [("rtsp", 554)]
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 START_TS = time.time()
 
@@ -300,6 +302,9 @@ def cmd_brute(target, service, port):
     # -f  : stop at the first valid pair · -I ignore restore file · -w 5 per-connect wait
     # SSH (esp. modern OpenSSH) refuses parallel connects, so use one task; others 4.
     tasks = "1" if service == "ssh" else "4"
+    if service == "http-get":
+        return [HYDRA, "-L", users, "-P", passwords, "-u", "-t", tasks, "-f", "-I", "-w", "5",
+                f"http-get://{target}:{port}/"]
     return [HYDRA, "-L", users, "-P", passwords, "-u", "-t", tasks, "-f", "-I", "-w", "5",
             f"{service}://{target}:{port}"]
 
@@ -488,7 +493,7 @@ class Engine:
         self._emit_status(module, "running", f"brute {service}…")
         found = []
         # Matches hydra success line: [22][ssh] host: 1.2.3.4   login: admin   password: 1234
-        rx = re.compile(r"\[\d+\]\[(\w+)\]\s+host:\s*(\S+)\s+login:\s*(.*?)\s+password:\s*(.*)$")
+        rx = re.compile(r"\[\d+\]\[([\w-]+)\]\s+host:\s*(\S+)\s+login:\s*(.*?)\s+password:\s*(.*)$")
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, bufsize=1)
@@ -723,6 +728,14 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *a):  # keep stdout clean (journald already timestamps)
         pass
 
+    def end_headers(self):
+        # Force revalidation for JS/CSS so browsers always get the latest version
+        path = urlparse(self.path).path
+        if path.endswith((".js", ".css", ".html")) or path == "/":
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+        super().end_headers()
+
     # -- helpers ------------------------------------------------------------
     def _body(self):
         try:
@@ -753,6 +766,10 @@ class Handler(SimpleHTTPRequestHandler):
             if (self.headers.get("Upgrade", "").lower() == "websocket"):
                 return self._ws()
             return self._json(400, {"error": "expected websocket upgrade"})
+        if path == "/api/cam/probe":
+            return self._cam_probe_ep()
+        if path == "/api/cam/stream":
+            return self._cam_stream_ep()
         return super().do_GET()
 
     def do_POST(self):
@@ -772,6 +789,166 @@ class Handler(SimpleHTTPRequestHandler):
             code, resp = ENGINE.stop_all(rid)
             return self._json(code, resp)
         return self._json(404, {"error": "not found"})
+
+    # -- camera proxy -------------------------------------------------------
+    def _cam_probe_ep(self):
+        """GET /api/cam/probe?host=IP&user=USER&pass=PASS
+        Tries common IP-camera stream and snapshot paths; returns the first
+        working one so the frontend knows how to display the feed."""
+        qs = parse_qs(urlparse(self.path).query)
+        host = (qs.get("host", [""])[0]).strip()
+        user = (qs.get("user", [""])[0]).strip()
+        pw   = (qs.get("pass", [""])[0]).strip()
+        if not valid_ipv4(host) or not is_private_ipv4(host):
+            return self._json(400, {"error": "host không hợp lệ hoặc ngoài RFC1918"})
+
+        auth = ("Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()) if user else None
+
+        def probe(path, timeout=3):
+            req = urllib.request.Request(f"http://{host}{path}")
+            if auth:
+                req.add_header("Authorization", auth)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    ct = r.headers.get("Content-Type", "")
+                    head = r.read(32)
+                return ct, head
+            except Exception:
+                return "", b""
+
+        # Check RTSP port 554 first — if open, ffmpeg can transcode it
+        import socket as _sock
+        try:
+            s = _sock.create_connection((host, 554), timeout=2)
+            s.close()
+            rtsp_url = f"rtsp://{user}:{pw}@{host}:554/" if user else f"rtsp://{host}:554/"
+            return self._json(200, {"type": "rtsp", "path": rtsp_url})
+        except OSError:
+            pass
+
+        for path in ("/video.mjpeg", "/mjpg/video.mjpeg", "/mjpeg", "/stream",
+                     "/videostream.cgi", "/axis-cgi/mjpg/video.cgi"):
+            ct, _ = probe(path)
+            if "multipart" in ct.lower():
+                return self._json(200, {"type": "mjpeg", "path": path})
+
+        for path in ("/snapshot.jpg", "/image.jpg", "/snapshot.cgi",
+                     "/snapshot", "/jpg/image.jpg", "/cgi-bin/snapshot.jpg",
+                     "/tmpfs/auto.jpg", "/capture", "/webcapture.jpg"):
+            ct, head = probe(path)
+            if "image" in ct.lower() or head[:2] == b"\xff\xd8":
+                return self._json(200, {"type": "snapshot", "path": path})
+
+        ct, _ = probe("/")
+        if ct:
+            return self._json(200, {"type": "webpage", "path": "/"})
+
+        return self._json(200, {"type": "none"})
+
+    def _cam_stream_ep(self):
+        """GET /api/cam/stream?host=IP&user=USER&pass=PASS&path=PATH
+        Proxies the upstream camera stream (MJPEG, JPEG snapshot, or RTSP via ffmpeg).
+        Only RFC1918 hosts are allowed to prevent SSRF."""
+        qs = parse_qs(urlparse(self.path).query)
+        host     = (qs.get("host", [""])[0]).strip()
+        user     = (qs.get("user", [""])[0]).strip()
+        pw       = (qs.get("pass", [""])[0]).strip()
+        cam_path = (qs.get("path", ["/snapshot.jpg"])[0]).strip()
+        if not valid_ipv4(host) or not is_private_ipv4(host):
+            return self._json(400, {"error": "host không hợp lệ hoặc ngoài RFC1918"})
+
+        # RTSP path: transcode with ffmpeg → MJPEG multipart stream
+        if cam_path.startswith("rtsp://"):
+            boundary = "frame"
+            self.send_response(200)
+            self.send_header("Content-Type", f"multipart/x-mixed-replace;boundary={boundary}")
+            self.send_header("Cache-Control", "no-store, no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            cmd = [
+                "ffmpeg", "-loglevel", "quiet",
+                "-rtsp_transport", "tcp",
+                "-i", cam_path,
+                "-vf", "fps=10,scale=640:-1,vflip,hflip",
+                "-q:v", "5",
+                "-f", "image2pipe",
+                "-vcodec", "mjpeg",
+                "pipe:1"
+            ]
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                buf = b""
+                SOI = b"\xff\xd8"
+                EOI = b"\xff\xd9"
+                while True:
+                    chunk = proc.stdout.read(16384)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while True:
+                        s = buf.find(SOI)
+                        if s == -1:
+                            buf = b""
+                            break
+                        e = buf.find(EOI, s + 2)
+                        if e == -1:
+                            buf = buf[s:]
+                            break
+                        frame = buf[s:e + 2]
+                        buf = buf[e + 2:]
+                        try:
+                            header = (
+                                f"--{boundary}\r\n"
+                                f"Content-Type: image/jpeg\r\n"
+                                f"Content-Length: {len(frame)}\r\n\r\n"
+                            ).encode()
+                            self.wfile.write(header + frame + b"\r\n")
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            proc.terminate()
+                            return
+                proc.wait()
+            except Exception:
+                return
+            return
+
+        if not cam_path.startswith("/"):
+            cam_path = "/" + cam_path
+
+        req = urllib.request.Request(f"http://{host}{cam_path}")
+        if user:
+            req.add_header("Authorization",
+                           "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode())
+        try:
+            resp = urllib.request.urlopen(req, timeout=10)
+            ct   = resp.headers.get("Content-Type", "image/jpeg")
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Cache-Control", "no-store, no-cache")
+            if "multipart" in ct.lower():
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                while True:
+                    chunk = resp.read(16384)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+            else:
+                data = resp.read()
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            resp.close()
+        except urllib.error.HTTPError as e:
+            self._json(e.code, {"error": f"camera HTTP {e.code}"})
+        except Exception as e:  # noqa: BLE001
+            self._json(502, {"error": str(e)})
 
     # -- websocket ----------------------------------------------------------
     def _ws(self):
