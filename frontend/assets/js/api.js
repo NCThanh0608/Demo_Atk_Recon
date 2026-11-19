@@ -206,6 +206,66 @@ class MockClient {
   disconnect() { /* no persistent connection in mock */ }
 }
 
+/* ---------------------------------------------------- Camera fMP4 / MSE */
+export function openCamFmp4(host, user, pass, path, videoEl, onReady, onError) {
+  const params = new URLSearchParams({ host, user, pass, path });
+  const url = `/api/cam/fmp4?${params}`;
+  const mime = 'video/mp4; codecs="avc1.42E01E"';
+
+  if (!('MediaSource' in window) || !MediaSource.isTypeSupported(mime)) {
+    onError('Trình duyệt không hỗ trợ MSE / H.264');
+    return null;
+  }
+
+  const ms = new MediaSource();
+  const objUrl = URL.createObjectURL(ms);
+  videoEl.src = objUrl;
+
+  let aborted = false;
+  let controller = null;
+
+  const cleanup = () => {
+    aborted = true;
+    try { controller?.abort(); } catch {}
+    try { if (ms.readyState === 'open') ms.endOfStream(); } catch {}
+    videoEl.pause();
+    videoEl.src = '';
+    videoEl.load();
+  };
+
+  ms.addEventListener('sourceopen', async () => {
+    URL.revokeObjectURL(objUrl);
+    let sb;
+    try {
+      sb = ms.addSourceBuffer(mime);
+      sb.mode = 'sequence';
+    } catch (e) { onError('MSE addSourceBuffer: ' + e.message); return; }
+
+    controller = new AbortController();
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) { onError('HTTP ' + res.status); return; }
+      const reader = res.body.getReader();
+      let first = true;
+
+      (async () => {
+        while (!aborted) {
+          const { done, value } = await reader.read();
+          if (done || aborted) break;
+          if (sb.updating) await new Promise(r => sb.addEventListener('updateend', r, { once: true }));
+          if (aborted) break;
+          try { sb.appendBuffer(value); } catch {}
+          if (first) { first = false; onReady(); }
+        }
+      })().catch(e => { if (!aborted && e.name !== 'AbortError') onError(e.message || String(e)); });
+    } catch (e) {
+      if (!aborted && e.name !== 'AbortError') onError(e.message || String(e));
+    }
+  }, { once: true });
+
+  return { close: cleanup };
+}
+
 /* --------------------------------------------------------------- Factory */
 export async function createClient() {
   try {

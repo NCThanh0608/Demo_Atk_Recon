@@ -180,19 +180,31 @@ export function showCamPanel(ip, user) {
   const title = document.getElementById('cam-title');
   const chip  = document.getElementById('cam-chip');
   const img   = document.getElementById('cam-img');
+  const video = document.getElementById('cam-video');
   const load  = document.getElementById('cam-loading');
   if (title) title.textContent = `${ip}  ·  ${user}`;
   if (chip)  { chip.textContent = 'đang kết nối…'; chip.className = 'chip cam-chip'; }
-  if (img)   img.src = '';
+  if (img)   { img.src = ''; img.hidden = false; }
+  if (video) { video.pause(); video.src = ''; video.load(); video.hidden = true; }
   if (load)  load.hidden = false;
   if (panel) { panel.hidden = false; setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50); }
 }
 
 export function hideCamPanel() {
   const img   = document.getElementById('cam-img');
+  const video = document.getElementById('cam-video');
   const panel = document.getElementById('cam-panel');
   if (img)   img.src = '';
+  if (video) { video.pause(); video.src = ''; video.load(); video.hidden = true; }
   if (panel) panel.hidden = true;
+}
+
+// Switch between img (HTTP stream/snapshot) and video (fMP4/MSE) modes.
+export function showCamVideo(useVideo) {
+  const img   = document.getElementById('cam-img');
+  const video = document.getElementById('cam-video');
+  if (img)   img.hidden = useVideo;
+  if (video) video.hidden = !useVideo;
 }
 
 export function setCamStream(url, label) {

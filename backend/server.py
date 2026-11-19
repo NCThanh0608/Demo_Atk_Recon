@@ -770,6 +770,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._cam_probe_ep()
         if path == "/api/cam/stream":
             return self._cam_stream_ep()
+        if path == "/api/cam/fmp4":
+            return self._cam_fmp4_ep()
         return super().do_GET()
 
     def do_POST(self):
@@ -868,10 +870,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.close_connection = True
             cmd = [
                 "ffmpeg", "-loglevel", "quiet",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-probesize", "32",
+                "-analyzeduration", "0",
                 "-rtsp_transport", "tcp",
                 "-i", cam_path,
-                "-vf", "fps=10,scale=640:-1,vflip,hflip",
-                "-q:v", "5",
+                "-vf", "fps=20,scale=640:-1,vflip,hflip",
+                "-q:v", "3",
                 "-f", "image2pipe",
                 "-vcodec", "mjpeg",
                 "pipe:1"
@@ -949,6 +955,64 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(e.code, {"error": f"camera HTTP {e.code}"})
         except Exception as e:  # noqa: BLE001
             self._json(502, {"error": str(e)})
+
+    def _cam_fmp4_ep(self):
+        """GET /api/cam/fmp4?host=IP&user=USER&pass=PASS&path=RTSP_URL
+        Streams RTSP via ffmpeg as fragmented MP4 (H.264 baseline, ultrafast).
+        Browser feeds the chunked response into MSE for hardware-accelerated playback."""
+        qs = parse_qs(urlparse(self.path).query)
+        host     = (qs.get("host", [""])[0]).strip()
+        cam_path = (qs.get("path", [""])[0]).strip()
+        if not valid_ipv4(host) or not is_private_ipv4(host):
+            return self._json(400, {"error": "host không hợp lệ hoặc ngoài RFC1918"})
+        if not cam_path.startswith("rtsp://"):
+            return self._json(400, {"error": "chỉ hỗ trợ RTSP"})
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Cache-Control", "no-store, no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        cmd = [
+            "ffmpeg", "-loglevel", "quiet",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-probesize", "32",
+            "-analyzeduration", "0",
+            "-rtsp_transport", "tcp",
+            "-i", cam_path,
+            "-vf", "fps=20,scale=640:-1,vflip,hflip",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-level", "3.0",
+            "-b:v", "800k",
+            "-an",
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "pipe:1"
+        ]
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    proc.terminate()
+                    return
+            proc.wait()
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
 
     # -- websocket ----------------------------------------------------------
     def _ws(self):

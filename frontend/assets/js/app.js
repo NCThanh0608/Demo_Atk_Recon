@@ -1,7 +1,7 @@
 // app.js — wires the UI to the transport client. Entry point (loaded as a module).
 
 import { CONFIG, MODULES, isPrivateIPv4, isIPv4OrCIDRv4 } from './config.js';
-import { createClient } from './api.js';
+import { createClient, openCamFmp4 } from './api.js';
 import * as ui from './ui.js';
 
 const rangeEl = document.getElementById('range');
@@ -15,10 +15,12 @@ const results = new Map();    // ip -> {ip, hostname, vendor, mac, ports: null|[
 
 // Camera viewer state
 let _camRefreshTimer = null;
+let _camFmp4 = null;
 let _camCtx = null;           // { ip, user, pass, path, type }
 
 async function openCamViewer(ip, user, pass) {
   if (_camRefreshTimer) { clearInterval(_camRefreshTimer); _camRefreshTimer = null; }
+  if (_camFmp4) { try { _camFmp4.close(); } catch { /* noop */ } _camFmp4 = null; }
   ui.showCamPanel(ip, user);
   ui.log('cam', `mở camera ${ip} (${user}:${pass})`, 'info');
   try {
@@ -34,9 +36,27 @@ async function openCamViewer(ip, user, pass) {
     }
     const mkUrl = (ts) =>
       `/api/cam/stream?host=${encodeURIComponent(ip)}&user=${encodeURIComponent(user)}&pass=${encodeURIComponent(pass)}&path=${encodeURIComponent(info.path)}&_t=${ts || Date.now()}`;
-    if (info.type === 'mjpeg' || info.type === 'rtsp') {
-      ui.setCamStream(mkUrl(), info.type === 'rtsp' ? 'RTSP → MJPEG live' : 'MJPEG live');
-      ui.log('cam', `${info.type === 'rtsp' ? 'RTSP stream' : 'MJPEG stream'} tại ${ip}`, 'ok');
+    if (info.type === 'rtsp') {
+      // fMP4 + MSE: ffmpeg encodes H.264 baseline, browser plays via MediaSource
+      const videoEl = document.getElementById('cam-video');
+      ui.showCamVideo(true);
+      const chip = document.getElementById('cam-chip');
+      if (chip) { chip.textContent = '● RTSP → fMP4'; chip.className = 'chip cam-chip live'; }
+      _camFmp4 = openCamFmp4(ip, user, pass, info.path, videoEl,
+        () => {
+          const load = document.getElementById('cam-loading');
+          if (load) load.hidden = true;
+        },
+        (err) => {
+          ui.setCamStatus('Stream lỗi: ' + err, 'error');
+          ui.log('cam', 'fMP4 lỗi: ' + err, 'error');
+          _camFmp4 = null;
+        }
+      );
+      ui.log('cam', `RTSP → fMP4 stream tại ${ip}`, 'ok');
+    } else if (info.type === 'mjpeg') {
+      ui.setCamStream(mkUrl(), 'MJPEG live');
+      ui.log('cam', `MJPEG stream tại ${ip}`, 'ok');
     } else if (info.type === 'snapshot') {
       ui.setCamStream(mkUrl(), 'Snapshot auto-refresh');
       ui.log('cam', `snapshot tại ${ip}${info.path} — tự làm mới mỗi 1.5s`, 'ok');
@@ -53,6 +73,7 @@ async function openCamViewer(ip, user, pass) {
 
 function closeCamViewer() {
   if (_camRefreshTimer) { clearInterval(_camRefreshTimer); _camRefreshTimer = null; }
+  if (_camFmp4) { try { _camFmp4.close(); } catch { /* noop */ } _camFmp4 = null; }
   _camCtx = null;
   ui.hideCamPanel();
   ui.log('cam', 'đã đóng camera viewer', 'info');
