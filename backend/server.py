@@ -1017,7 +1017,7 @@ class Handler(SimpleHTTPRequestHandler):
     # -- websocket ----------------------------------------------------------
     def _ws(self):
         key = self.headers.get("Sec-WebSocket-Key")
-        if not key:
+        if not key:\
             return self._json(400, {"error": "missing Sec-WebSocket-Key"})
         accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
         self.send_response(101)
