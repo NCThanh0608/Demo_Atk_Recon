@@ -6,14 +6,6 @@ __pycache__/
 venv/
 .env
 
-# Binaries (large compiled ARM files)
-binaries/camera_dos
-binaries/camera-tools.tar
-binaries/camera-tools.tar.gz
-
-# Data
-data/credentials.csv
-
 # OS
 .DS_Store
 Thumbs.db
