@@ -10,6 +10,26 @@
   <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
+  <!-- Login overlay -->
+  <div id="login-overlay" class="login-overlay">
+    <form id="login-form" class="login-box" autocomplete="on">
+      <div class="login-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      </div>
+      <h2>Camera Fleet Manager</h2>
+      <div class="login-field">
+        <label for="login-user">Tài khoản</label>
+        <input class="inp mono" id="login-user" name="username" autocomplete="username" spellcheck="false" required>
+      </div>
+      <div class="login-field">
+        <label for="login-pass">Mật khẩu</label>
+        <input class="inp mono" id="login-pass" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div id="login-error" class="login-error" hidden></div>
+      <button class="btn btn-accent login-btn" type="submit">Đăng nhập</button>
+    </form>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <span class="logo" aria-hidden="true">
@@ -22,6 +42,8 @@
     </div>
     <span class="chip" id="conn"><span class="dot" style="background:var(--faint)"></span>Đang kết nối…</span>
     <span class="chip" id="cam-count">0 camera</span>
+    <span class="chip user-chip" id="user-chip" hidden></span>
+    <button class="btn btn-sm" id="logout-btn" type="button" hidden>Đăng xuất</button>
     <button class="theme-btn" id="theme" type="button">◐ Theme</button>
   </header>
 

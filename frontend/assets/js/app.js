@@ -8,6 +8,7 @@ let client = null;
 let cameraStatus = {};
 let binaryResults = [];
 let savedCredentials = [];
+let currentUser = null;
 
 // -- button spam guard --
 const _busy = {};
@@ -22,9 +23,70 @@ function releaseBtn(key, btn) {
   if (btn) btn.disabled = false;
 }
 
+function showLogin() {
+  $('#login-overlay').classList.remove('hidden');
+  $('#login-overlay').hidden = false;
+  $('#user-chip').hidden = true;
+  $('#logout-btn').hidden = true;
+}
+
+function hideLogin(username) {
+  currentUser = username;
+  $('#login-overlay').classList.add('hidden');
+  setTimeout(() => { $('#login-overlay').hidden = true; }, 300);
+  const chip = $('#user-chip');
+  chip.textContent = username;
+  chip.hidden = false;
+  $('#logout-btn').hidden = false;
+}
+
 async function init() {
   client = await createClient();
-  client.connectStream();
+
+  client.on401(() => {
+    currentUser = null;
+    client.disconnect_ws();
+    showLogin();
+  });
+
+  const me = await client.me();
+  if (me) {
+    hideLogin(me);
+    client.connectStream();
+  } else {
+    showLogin();
+  }
+
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const user = $('#login-user').value.trim();
+    const pass = $('#login-pass').value;
+    const errEl = $('#login-error');
+    errEl.hidden = true;
+    try {
+      const r = await client.login(user, pass);
+      if (r.ok) {
+        hideLogin(r.username);
+        client.connectStream();
+        loadCredentials();
+        loadStatus();
+      } else {
+        errEl.textContent = r.error || 'Sai tài khoản hoặc mật khẩu';
+        errEl.hidden = false;
+      }
+    } catch {
+      errEl.textContent = 'Không kết nối được server';
+      errEl.hidden = false;
+    }
+  });
+
+  $('#logout-btn').addEventListener('click', async () => {
+    await client.logout();
+    currentUser = null;
+    client.disconnect_ws();
+    showLogin();
+  });
+
   client.onEvent(onEvent);
 
   UI.setupTheme();
@@ -79,9 +141,11 @@ async function init() {
   // log
   $('#log-clear').addEventListener('click', UI.clearLog);
 
-  // initial data load
-  loadCredentials();
-  loadStatus();
+  // initial data load (only if already logged in)
+  if (currentUser) {
+    loadCredentials();
+    loadStatus();
+  }
 }
 
 // ---------------------------------------------------------------- events
@@ -442,7 +506,7 @@ async function loadStatus() {
   } catch {}
 }
 
-// refresh status every 5s
-setInterval(loadStatus, 5000);
+// refresh status every 5s (skip if not logged in)
+setInterval(() => { if (currentUser) loadStatus(); }, 5000);
 
 init();

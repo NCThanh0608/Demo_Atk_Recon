@@ -214,3 +214,16 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
   .ind-cred-row{flex-direction:column;align-items:stretch}
   .ind-cred-row .inp{max-width:none}
 }
+
+/* Login overlay */
+.login-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:var(--bg);transition:opacity .3s}
+.login-overlay.hidden{opacity:0;pointer-events:none}
+.login-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:36px 32px 28px;width:340px;max-width:90vw;box-shadow:var(--shadow);text-align:center}
+.login-logo svg{width:48px;height:48px;color:var(--accent);margin-bottom:8px}
+.login-box h2{font:600 1.3rem var(--display);margin:0 0 20px;color:var(--fg)}
+.login-field{text-align:left;margin-bottom:12px}
+.login-field label{display:block;font:500 .78rem var(--sans);color:var(--muted);margin-bottom:4px}
+.login-field .inp{width:100%;box-sizing:border-box}
+.login-error{color:var(--crit);font:500 .82rem var(--sans);margin:8px 0;text-align:center}
+.login-btn{width:100%;margin-top:8px;padding:10px}
+.user-chip{background:var(--accent-soft);color:var(--accent);font-weight:600}

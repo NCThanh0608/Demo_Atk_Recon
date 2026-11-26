@@ -16,17 +16,42 @@ class LiveClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (res.status === 401 && this._on401) this._on401();
     return res.json();
   }
 
   async _get(path) {
     const res = await fetch(CONFIG.apiBase + path);
+    if (res.status === 401 && this._on401) this._on401();
     return res.json();
   }
 
   async _delete(path) {
     const res = await fetch(CONFIG.apiBase + path, { method: 'DELETE' });
+    if (res.status === 401 && this._on401) this._on401();
     return res.json();
+  }
+
+  on401(cb) { this._on401 = cb; }
+
+  async login(username, password) {
+    const res = await fetch(CONFIG.apiBase + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    return res.json();
+  }
+
+  async logout() {
+    await fetch(CONFIG.apiBase + '/logout', { method: 'POST' });
+  }
+
+  async me() {
+    const res = await fetch(CONFIG.apiBase + '/me');
+    if (res.status === 401) return null;
+    const data = await res.json();
+    return data.username || null;
   }
 
   health()       { return this._get('/health'); }
@@ -57,6 +82,7 @@ class LiveClient {
   _emit(msg)  { this._listeners.forEach(cb => cb(msg)); }
 
   connectStream() {
+    this._stopped = false;
     const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + CONFIG.streamPath;
     const open = () => {
       if (this._stopped) return;
