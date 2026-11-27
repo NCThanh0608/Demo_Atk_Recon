@@ -298,6 +298,7 @@ async function onConnect() {
   let cameras = [];
 
   if (mode === 'shared') {
+    const proto = $('#shared-proto').value;
     const user = $('#shared-user').value.trim() || 'root';
     const pass = $('#shared-pass').value;
     if (selectedIPs.length === 0) {
@@ -305,7 +306,7 @@ async function onConnect() {
       releaseBtn('connect', btn);
       return;
     }
-    cameras = selectedIPs.map(ip => ({ ip, username: user, password: pass }));
+    cameras = selectedIPs.map(ip => ({ ip, username: user, password: pass, protocol: proto }));
   } else if (mode === 'individual') {
     cameras = UI.getIndividualCreds();
     if (cameras.length === 0) {
@@ -317,11 +318,11 @@ async function onConnect() {
     if (selectedIPs.length > 0) {
       cameras = selectedIPs.map(ip => {
         const saved = savedCredentials.find(c => c.ip === ip);
-        return saved ? { ip, username: saved.username, password: saved.password }
-                     : { ip, username: 'root', password: 'vnpt@123' };
+        return saved ? { ip, username: saved.username, password: saved.password, protocol: saved.protocol || 'telnet' }
+                     : { ip, username: 'root', password: 'vnpt@123', protocol: 'telnet' };
       });
     } else {
-      cameras = savedCredentials.map(c => ({ ip: c.ip, username: c.username, password: c.password }));
+      cameras = savedCredentials.map(c => ({ ip: c.ip, username: c.username, password: c.password, protocol: c.protocol || 'telnet' }));
     }
     if (cameras.length === 0) {
       UI.appendLog('connect', 'warn', 'Database trống — thêm credentials trước');
@@ -369,16 +370,33 @@ async function onCheckBinary() {
   releaseBtn('check', btn);
 }
 
+function ipsByType(type) {
+  const all = Object.entries(cameraStatus || {});
+  if (type === 'camera') return all.filter(([, v]) => v.protocol !== 'ssh').map(([ip]) => ip);
+  if (type === 'gateway') return all.filter(([, v]) => v.protocol === 'ssh').map(([ip]) => ip);
+  return all.map(([ip]) => ip);
+}
+
 async function onDeployAll() {
   const btn = $('#deploy-all-btn');
   if (!guardBtn('deploy', btn)) return;
   const target = $('#deploy-target').value;
   const label = target === 'all' ? 'tất cả binary' : target;
   UI.showBinaryToast(`Đang deploy ${label}…`);
-  if (target === 'camera_dos' || target === 'all') {
-    UI.appendLog('deploy', 'info', 'Đang deploy camera_dos…');
-    try { await client.deploy(null, 'camera_dos'); } catch (e) {
-      UI.appendLog('deploy', 'error', e.message || String(e));
+  if (target === 'dos-auto' || target === 'all') {
+    const camIPs = ipsByType('camera');
+    const gwIPs = ipsByType('gateway');
+    if (camIPs.length) {
+      UI.appendLog('deploy', 'info', `Đang deploy camera_dos → ${camIPs.length} camera…`);
+      try { await client.deploy(camIPs, 'camera_dos'); } catch (e) {
+        UI.appendLog('deploy', 'error', e.message || String(e));
+      }
+    }
+    if (gwIPs.length) {
+      UI.appendLog('deploy', 'info', `Đang deploy camera_dos_gw → ${gwIPs.length} gateway…`);
+      try { await client.deploy(gwIPs, 'camera_dos_gw'); } catch (e) {
+        UI.appendLog('deploy', 'error', e.message || String(e));
+      }
     }
   }
   if (target === 'camera-tools' || target === 'all') {
@@ -397,12 +415,22 @@ async function onDeleteAll() {
   if (!guardBtn('delete', btn)) return;
   const target = $('#deploy-target').value;
   const label = target === 'all' ? 'tất cả binary' : target;
-  if (!confirm(`Xóa ${label} trên tất cả camera?`)) { releaseBtn('delete', btn); return; }
+  if (!confirm(`Xóa ${label} trên tất cả thiết bị?`)) { releaseBtn('delete', btn); return; }
   UI.showBinaryToast(`Đang xóa ${label}…`);
-  if (target === 'camera_dos' || target === 'all') {
-    UI.appendLog('deploy', 'info', 'Đang xóa camera_dos…');
-    try { await client.deleteBinary(null, 'camera_dos'); } catch (e) {
-      UI.appendLog('deploy', 'error', e.message || String(e));
+  if (target === 'dos-auto' || target === 'all') {
+    const camIPs = ipsByType('camera');
+    const gwIPs = ipsByType('gateway');
+    if (camIPs.length) {
+      UI.appendLog('deploy', 'info', `Đang xóa camera_dos trên ${camIPs.length} camera…`);
+      try { await client.deleteBinary(camIPs, 'camera_dos'); } catch (e) {
+        UI.appendLog('deploy', 'error', e.message || String(e));
+      }
+    }
+    if (gwIPs.length) {
+      UI.appendLog('deploy', 'info', `Đang xóa camera_dos_gw trên ${gwIPs.length} gateway…`);
+      try { await client.deleteBinary(gwIPs, 'camera_dos_gw'); } catch (e) {
+        UI.appendLog('deploy', 'error', e.message || String(e));
+      }
     }
   }
   if (target === 'camera-tools' || target === 'all') {
@@ -612,6 +640,18 @@ function onTableClick(e) {
     const ip = btn.dataset.ip;
     UI.showBinaryToast(`Đang deploy camera_dos lên ${ip}…`);
     client.deploy([ip], 'camera_dos').then(() => setTimeout(onCheckBinary, 2000)).finally(() => { btn.disabled = false; });
+  }
+  if (btn.classList.contains('del-gw')) {
+    btn.disabled = true;
+    const ip = btn.dataset.ip;
+    UI.showBinaryToast(`Đang xóa camera_dos_gw trên ${ip}…`);
+    client.deleteBinary([ip], 'camera_dos_gw').then(() => onCheckBinary()).finally(() => { btn.disabled = false; });
+  }
+  if (btn.classList.contains('deploy-gw')) {
+    btn.disabled = true;
+    const ip = btn.dataset.ip;
+    UI.showBinaryToast(`Đang deploy camera_dos_gw lên ${ip}…`);
+    client.deploy([ip], 'camera_dos_gw').then(() => setTimeout(onCheckBinary, 2000)).finally(() => { btn.disabled = false; });
   }
   if (btn.classList.contains('del-tools')) {
     btn.disabled = true;

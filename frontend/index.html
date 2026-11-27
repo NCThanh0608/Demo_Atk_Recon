@@ -82,7 +82,7 @@
       <div class="card-h">
         <h2>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg>
-          Bước 2 — Kết nối Telnet
+          Bước 2 — Kết nối
         </h2>
       </div>
       <div class="card-body">
@@ -92,6 +92,14 @@
           <label class="radio-label"><input type="radio" name="cred-mode" value="saved"> Từ database</label>
         </div>
         <div id="shared-creds" class="row">
+          <div class="fld" style="max-width:120px">
+            <label>Protocol</label>
+            <select class="inp" id="shared-proto">
+              <option value="auto" selected>Auto</option>
+              <option value="telnet">Telnet</option>
+              <option value="ssh">SSH</option>
+            </select>
+          </div>
           <div class="fld">
             <label>Username</label>
             <input class="inp mono" id="shared-user" value="root" spellcheck="false">
@@ -124,14 +132,14 @@
       </div>
       <div class="card-body">
         <table class="rtable" id="binary-table">
-          <thead><tr><th>Camera IP</th><th>Trạng thái</th><th>camera_dos</th><th>camera-tools</th><th>Hành động</th></tr></thead>
+          <thead><tr><th>IP</th><th>Trạng thái</th><th>DoS (CAM)</th><th>DoS (GW)</th><th>Recon Tools</th><th>Hành động</th></tr></thead>
           <tbody id="binary-body"></tbody>
         </table>
         <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
-          <select class="inp" id="deploy-target" style="max-width:200px;padding:8px 10px">
-            <option value="camera_dos">camera_dos (DoS)</option>
+          <select class="inp" id="deploy-target" style="max-width:240px;padding:8px 10px">
+            <option value="dos-auto">DoS binary (Auto detect)</option>
             <option value="camera-tools">camera-tools (Recon)</option>
-            <option value="all">Tất cả binary</option>
+            <option value="all">Tất cả</option>
           </select>
           <button class="btn btn-accent" id="deploy-all-btn" type="button">Deploy</button>
           <button class="btn btn-crit" id="delete-all-btn" type="button">Xóa</button>

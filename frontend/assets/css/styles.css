@@ -157,6 +157,9 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .st-offline{color:var(--crit);font-weight:600}
 .st-exists{color:var(--good)}
 .st-missing{color:var(--warn)}
+.st-na{color:var(--faint)}
+.chip-cam{display:inline-block;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);vertical-align:middle;margin-left:4px}
+.chip-gw{display:inline-block;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:4px;background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn);vertical-align:middle;margin-left:4px}
 .ip-cell{font-family:var(--mono);font-weight:600;font-size:.82rem}
 
 /* console */
