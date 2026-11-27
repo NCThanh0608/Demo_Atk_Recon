@@ -33,7 +33,7 @@ let scannedHosts = [];
 
 export function getScannedHosts() { return scannedHosts; }
 
-export function renderScanResults(hosts) {
+export function renderScanResults(hosts, locks, me) {
   scannedHosts = hosts;
   const tbody = $('#scan-body');
   const wrap = $('#scan-results');
@@ -41,10 +41,15 @@ export function renderScanResults(hosts) {
   wrap.hidden = false;
   tbody.innerHTML = '';
   hosts.forEach((h, i) => {
+    const owner = locks?.[h.ip];
+    const lockedByOther = owner && owner !== me;
+    const disabled = lockedByOther ? ' disabled' : '';
+    const lockLabel = lockedByOther ? ` <span class="st-locked">🔒 ${escapeHtml(owner)}</span>` : '';
     const tr = document.createElement('tr');
+    if (lockedByOther) tr.classList.add('row-locked');
     tr.innerHTML = `
-      <td><input type="checkbox" class="host-cb" data-idx="${i}" data-ip="${escapeHtml(h.ip)}"></td>
-      <td class="ip-cell">${escapeHtml(h.ip)}</td>
+      <td><input type="checkbox" class="host-cb" data-idx="${i}" data-ip="${escapeHtml(h.ip)}"${disabled}></td>
+      <td class="ip-cell">${escapeHtml(h.ip)}${lockLabel}</td>
       <td>${escapeHtml(h.hostname || '—')}</td>
       <td class="mono">${escapeHtml(h.mac || '—')}</td>
       <td>${escapeHtml(h.vendor || '—')}</td>
@@ -183,7 +188,7 @@ export function updateScanBadge(state, text) {
 }
 
 // ---------------------------------------------------------------- exec camera list
-export function renderExecCameras(cameraStatus, binaryResults) {
+export function renderExecCameras(cameraStatus, binaryResults, locks, me) {
   const tbody = $('#exec-cam-body');
   if (!tbody) return;
 
@@ -203,6 +208,8 @@ export function renderExecCameras(cameraStatus, binaryResults) {
   connectedIPs.forEach(ip => {
     const cam = cameraStatus[ip];
     const bin = checkMap[ip];
+    const owner = locks?.[ip];
+    const lockedByOther = owner && owner !== me;
     const online = cam?.connected ? '<span class="st-online">Online</span>' : '<span class="st-offline">Offline</span>';
     let binStatus = '<span class="st-missing">—</span>';
     if (bin) {
@@ -210,11 +217,14 @@ export function renderExecCameras(cameraStatus, binaryResults) {
         ? '<span class="st-exists">&#10003;</span>'
         : '<span class="st-missing">&#10007;</span>';
     }
-    const checked = prevChecked.has(ip) ? ' checked' : '';
+    const checked = prevChecked.has(ip) && !lockedByOther ? ' checked' : '';
+    const disabled = lockedByOther ? ' disabled' : '';
+    const lockLabel = lockedByOther ? ` <span class="st-locked">🔒 ${escapeHtml(owner)}</span>` : '';
     const tr = document.createElement('tr');
+    if (lockedByOther) tr.classList.add('row-locked');
     tr.innerHTML = `
-      <td><input type="checkbox" class="exec-cb" data-ip="${escapeHtml(ip)}"${checked}></td>
-      <td class="ip-cell">${escapeHtml(ip)}</td>
+      <td><input type="checkbox" class="exec-cb" data-ip="${escapeHtml(ip)}"${checked}${disabled}></td>
+      <td class="ip-cell">${escapeHtml(ip)}${lockLabel}</td>
       <td>${online}</td>
       <td>${binStatus}</td>`;
     tbody.appendChild(tr);
@@ -267,22 +277,14 @@ export function showMonitorPanel(visible) {
   }
 }
 
-export function updateMonitorPanel(data) {
+export function updateMonitorPanel(data, globalDuration) {
   const panel = $('#monitor-panel');
   if (!panel || panel.hidden) return;
   const cards = $('#monitor-cards');
-  const elapsedEl = $('#monitor-elapsed');
   if (!cards) return;
 
   const ips = Object.keys(data).sort();
   if (ips.length === 0) return;
-
-  if (elapsedEl) {
-    const first = data[ips[0]];
-    const s = first?.elapsed || 0;
-    const m = Math.floor(s / 60);
-    elapsedEl.textContent = m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
-  }
 
   cards.innerHTML = '';
   ips.forEach(ip => {
@@ -298,6 +300,14 @@ export function updateMonitorPanel(data) {
     const modes = (d.modes || []).map(m =>
       m === 'udp' ? 'UDP' : m === 'icmp' ? 'ICMP' : m === 'syn' ? 'SYN' : 'Slowloris'
     ).join(' + ') || '—';
+
+    const devDur = d.duration || globalDuration || 0;
+    const s = d.elapsed || 0;
+    let timeHTML = fmtDuration(s);
+    if (devDur > 0) {
+      const rem = Math.max(0, devDur - s);
+      timeHTML = `${fmtDuration(s)} / ${fmtDuration(devDur)} <span class="mon-remaining">(còn ${fmtDuration(rem)})</span>`;
+    }
 
     let metricsHTML = '';
 
@@ -365,10 +375,17 @@ export function updateMonitorPanel(data) {
         <span class="mon-ip">${escapeHtml(ip)}</span>
         <span class="mon-status ${statusClass}">${statusLabel}</span>
       </div>
+      <div class="mon-time">${timeHTML}</div>
       <div class="mon-modes">${escapeHtml(modes)}</div>
       <div class="mon-metrics">${metricsHTML}</div>`;
     cards.appendChild(card);
   });
+}
+
+function fmtDuration(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
 function fmtNum(n) {
@@ -376,6 +393,105 @@ function fmtNum(n) {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
   return String(n);
+}
+
+// ---------------------------------------------------------------- inline toast
+const _toastTimers = {};
+
+export function showToast(id, text, level = 'info', autoHide = 0) {
+  const el = $(`#${id}`);
+  if (!el) return;
+  clearTimeout(_toastTimers[id]);
+  el.hidden = false;
+  el.className = `binary-toast toast-${level}`;
+  const spinner = level === 'info' ? '<span class="toast-spinner"></span>' : '';
+  const icon = level === 'ok' ? '✓ ' : level === 'error' ? '✗ ' : '';
+  el.innerHTML = `${spinner}<span>${icon}${escapeHtml(text)}</span>`;
+  if (autoHide > 0) {
+    _toastTimers[id] = setTimeout(() => { el.hidden = true; }, autoHide);
+  }
+}
+
+export function hideToast(id) {
+  const el = $(`#${id}`);
+  if (el) el.hidden = true;
+  clearTimeout(_toastTimers[id]);
+}
+
+export function showBinaryToast(text, level, autoHide) { showToast('binary-toast', text, level, autoHide); }
+export function hideBinaryToast() { hideToast('binary-toast'); }
+
+// ---------------------------------------------------------------- per-device exec config
+const PD_PLACEHOLDERS = {
+  dos: '--udp-flood --udp-threads 10 --udp-rate 0 --udp-port 514',
+  recon: '--timeout 60 nmap -sT -Pn -n -p 22,80,443 192.168.1.28',
+  brute: '--timeout 120 hydra -l root -p vnpt@123 -t 1 telnet://192.168.1.28',
+};
+
+export function renderPerDeviceCameras(cameraStatus, binaryResults, defaultArgs, mode) {
+  const tbody = $('#exec-pd-body');
+  const thead = tbody?.closest('table')?.querySelector('thead');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const isDos = mode === 'dos';
+  const colCount = isDos ? 4 : 3;
+
+  if (thead) {
+    thead.innerHTML = isDos
+      ? '<tr><th>Camera IP</th><th style="width:130px">Target IP</th><th style="width:100px">Thời gian (s)</th><th>Tham số</th></tr>'
+      : '<tr><th>Camera IP</th><th style="width:120px">Thời gian (s)</th><th>Tham số</th></tr>';
+  }
+
+  const connectedIPs = Object.keys(cameraStatus || {});
+  if (connectedIPs.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;opacity:.5">Chưa có camera nào kết nối</td></tr>`;
+    return;
+  }
+
+  const selectedIPs = getSelectedExecIPs();
+  const ips = selectedIPs.length > 0 ? selectedIPs : connectedIPs;
+  const ph = PD_PLACEHOLDERS[mode] || PD_PLACEHOLDERS.dos;
+
+  ips.forEach(ip => {
+    const tr = document.createElement('tr');
+    const targetCol = isDos
+      ? `<td><input class="inp mono sm pd-target" data-ip="${escapeHtml(ip)}" placeholder="10.20.0.2" spellcheck="false"></td>`
+      : '';
+    tr.innerHTML = `
+      <td class="ip-cell">${escapeHtml(ip)}</td>
+      ${targetCol}
+      <td><input class="inp mono sm pd-duration" data-ip="${escapeHtml(ip)}" type="number" value="" min="0" placeholder="0"></td>
+      <td><input class="inp mono sm pd-args" data-ip="${escapeHtml(ip)}" value="${escapeHtml(defaultArgs || '')}" placeholder="${escapeHtml(ph)}"></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+export function fillAllPerDeviceArgs(args) {
+  $$('.pd-args').forEach(el => { el.value = args; });
+}
+
+export function getPerDeviceConfigs() {
+  const configs = [];
+  $$('#exec-pd-body tr').forEach(tr => {
+    const durInput = tr.querySelector('.pd-duration');
+    const argsInput = tr.querySelector('.pd-args');
+    const targetInput = tr.querySelector('.pd-target');
+    if (durInput && argsInput) {
+      const cfg = {
+        ip: durInput.dataset.ip,
+        duration: parseInt(durInput.value) || 0,
+        args: argsInput.value.trim()
+      };
+      if (targetInput) cfg.target_ip = targetInput.value.trim();
+      configs.push(cfg);
+    }
+  });
+  return configs;
+}
+
+export function fillAllPerDeviceTargets(target) {
+  $$('.pd-target').forEach(el => { el.value = target; });
 }
 
 // ---------------------------------------------------------------- add cred dialog

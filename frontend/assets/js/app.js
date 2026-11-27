@@ -9,6 +9,7 @@ let cameraStatus = {};
 let binaryResults = [];
 let savedCredentials = [];
 let currentUser = null;
+let deviceLocks = {};  // ip -> username
 
 // -- button spam guard --
 const _busy = {};
@@ -116,6 +117,9 @@ async function init() {
   $('#exec-stop-btn').addEventListener('click', onExecStop);
   $('#exec-mode').addEventListener('change', onModeChange);
   onModeChange();
+  document.querySelectorAll('input[name="exec-config"]').forEach(r => {
+    r.addEventListener('change', onExecConfigChange);
+  });
 
   // sidebar
   $('#sidebar-toggle').addEventListener('click', () => {
@@ -127,7 +131,12 @@ async function init() {
       const mode = el.dataset.mode;
       if (mode) $('#exec-mode').value = mode;
       onModeChange();
-      $('#exec-args').value = cmd;
+      const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
+      if (cfgMode === 'per-device') {
+        UI.fillAllPerDeviceArgs(cmd);
+      } else {
+        $('#exec-args').value = cmd;
+      }
       el.classList.add('copied');
       setTimeout(() => el.classList.remove('copied'), 1200);
     });
@@ -137,6 +146,16 @@ async function init() {
   $('#db-refresh').addEventListener('click', loadCredentials);
   $('#db-add').addEventListener('click', onAddCred);
   document.addEventListener('click', onTableClick);
+
+  // collapsible sections
+  $('#db-toggle').addEventListener('click', () => {
+    $('#db-body-wrap').classList.toggle('collapsed-body');
+    $('#db-arrow').classList.toggle('collapsed');
+  });
+  $('#log-toggle').addEventListener('click', () => {
+    $('#console').classList.toggle('collapsed-body');
+    $('#log-arrow').classList.toggle('collapsed');
+  });
 
   // log
   $('#log-clear').addEventListener('click', UI.clearLog);
@@ -156,26 +175,66 @@ function onEvent(msg) {
   }
   if (msg.type === 'log') {
     UI.appendLog(msg.module, msg.level, msg.text);
+    if (msg.module === 'deploy' && msg.text) {
+      const t = msg.text;
+      if (t.includes('wget') || t.includes('Tải') || t.includes('giải nén') || t.includes('Dọn dẹp') || t.includes('Stream'))
+        UI.showBinaryToast(t);
+      else if (t.includes('thành công') || t.includes('Đã xóa'))
+        UI.showBinaryToast(t, 'ok', 4000);
+      else if (t.includes('thất bại'))
+        UI.showBinaryToast(t, 'error', 5000);
+    }
+    if (msg.module === 'scan_ip' && msg.text) {
+      const t = msg.text;
+      if (t.includes('nmap') || t.includes('Đang quét'))
+        UI.showToast('scan-toast', t);
+      else if (msg.level === 'ok')
+        UI.showToast('scan-toast', t, 'ok', 5000);
+      else if (msg.level === 'error')
+        UI.showToast('scan-toast', t, 'error', 5000);
+    }
+    if (msg.module === 'connect' && msg.text) {
+      const t = msg.text;
+      if (t.includes('Đang kết nối'))
+        UI.showToast('connect-toast', t);
+      else if (t.includes('thành công') || t.includes('Kết nối xong'))
+        UI.showToast('connect-toast', t, 'ok', 5000);
+      else if (t.includes('thất bại') || msg.level === 'error')
+        UI.showToast('connect-toast', t, 'error', 5000);
+      else if (t.includes('Đã ngắt'))
+        UI.showToast('connect-toast', t, 'ok', 4000);
+    }
   }
   if (msg.type === 'result') {
     if (msg.module === 'scan_ip' && msg.data?.hosts) {
-      UI.renderScanResults(msg.data.hosts);
+      UI.renderScanResults(msg.data.hosts, deviceLocks, currentUser);
+      UI.showToast('scan-toast', `Tìm thấy ${msg.data.hosts.length} thiết bị`, 'ok', 5000);
     }
     if (msg.module === 'binary' && msg.data?.results) {
       binaryResults = msg.data.results;
       UI.renderBinaryStatus(binaryResults, cameraStatus);
     }
     if (msg.module === 'connect' && msg.data?.results) {
+      const ok = msg.data.results.filter(r => r.ok).length;
+      const total = msg.data.results.length;
+      UI.showToast('connect-toast', `Kết nối xong: ${ok}/${total} thành công`, ok === total ? 'ok' : 'error', 5000);
       loadStatus();
     }
     if (msg.module === 'deploy' && msg.data?.results) {
       releaseBtn('deploy', $('#deploy-all-btn'));
       releaseBtn('delete', $('#delete-all-btn'));
+      const ok = msg.data.results.filter(r => r.ok).length;
+      const total = msg.data.results.length;
+      UI.showBinaryToast(`Hoàn tất: ${ok}/${total} thành công`, ok === total ? 'ok' : 'error', 5000);
       onCheckBinary();
     }
   }
   if (msg.type === 'exec_monitor' && msg.data) {
-    UI.updateMonitorPanel(msg.data);
+    UI.updateMonitorPanel(msg.data, msg.duration || 0);
+  }
+  if (msg.type === 'exec_done') {
+    UI.appendLog('exec', 'info', 'Phiên thực thi kết thúc');
+    UI.showMonitorPanel(false);
   }
   if (msg.type === 'status' && msg.module === 'scan_ip') {
     if (msg.state === 'running') {
@@ -200,10 +259,12 @@ async function onScanStart() {
     releaseBtn('scan', btn);
     return;
   }
+  UI.showToast('scan-toast', `Đang quét ${range}…`);
   try {
     await client.scanStart(range);
   } catch (e) {
     UI.appendLog('scan_ip', 'error', e.message || String(e));
+    UI.showToast('scan-toast', e.message || String(e), 'error', 5000);
   }
   releaseBtn('scan', btn);
 }
@@ -270,19 +331,23 @@ async function onConnect() {
   }
 
   UI.appendLog('connect', 'info', `Đang kết nối ${cameras.length} camera…`);
+  UI.showToast('connect-toast', `Đang kết nối ${cameras.length} camera…`);
   try {
     await client.connect(cameras);
   } catch (e) {
     UI.appendLog('connect', 'error', e.message || String(e));
+    UI.showToast('connect-toast', e.message || String(e), 'error', 5000);
   }
   releaseBtn('connect', btn);
   loadStatus();
 }
 
 async function onDisconnectAll() {
+  UI.showToast('connect-toast', 'Đang ngắt tất cả…');
   try {
     await client.disconnect();
     UI.appendLog('connect', 'info', 'Đã ngắt tất cả');
+    UI.showToast('connect-toast', 'Đã ngắt tất cả', 'ok', 4000);
   } catch {}
   loadStatus();
 }
@@ -308,6 +373,8 @@ async function onDeployAll() {
   const btn = $('#deploy-all-btn');
   if (!guardBtn('deploy', btn)) return;
   const target = $('#deploy-target').value;
+  const label = target === 'all' ? 'tất cả binary' : target;
+  UI.showBinaryToast(`Đang deploy ${label}…`);
   if (target === 'camera_dos' || target === 'all') {
     UI.appendLog('deploy', 'info', 'Đang deploy camera_dos…');
     try { await client.deploy(null, 'camera_dos'); } catch (e) {
@@ -315,6 +382,7 @@ async function onDeployAll() {
     }
   }
   if (target === 'camera-tools' || target === 'all') {
+    UI.showBinaryToast('Đang deploy camera-tools (tải + giải nén)…');
     UI.appendLog('deploy', 'info', 'Đang deploy camera-tools (tar.gz)…');
     try { await client.deployTools(null); } catch (e) {
       UI.appendLog('deploy', 'error', e.message || String(e));
@@ -330,6 +398,7 @@ async function onDeleteAll() {
   const target = $('#deploy-target').value;
   const label = target === 'all' ? 'tất cả binary' : target;
   if (!confirm(`Xóa ${label} trên tất cả camera?`)) { releaseBtn('delete', btn); return; }
+  UI.showBinaryToast(`Đang xóa ${label}…`);
   if (target === 'camera_dos' || target === 'all') {
     UI.appendLog('deploy', 'info', 'Đang xóa camera_dos…');
     try { await client.deleteBinary(null, 'camera_dos'); } catch (e) {
@@ -372,12 +441,16 @@ const PRESETS = {
 
 function onModeChange() {
   const mode = $('#exec-mode').value;
+  const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
   const targetWrap = $('#exec-target-wrap');
-  if (mode === 'dos') {
+  if (mode === 'dos' && cfgMode !== 'per-device') {
     targetWrap.hidden = false;
-    $('#exec-args').placeholder = '--udp-flood --udp-threads 10 --udp-rate 0 --udp-port 514';
   } else {
     targetWrap.hidden = true;
+  }
+  if (mode === 'dos') {
+    $('#exec-args').placeholder = '--udp-flood --udp-threads 10 --udp-rate 0 --udp-port 514';
+  } else {
     $('#exec-args').placeholder = mode === 'recon'
       ? '--timeout 60 nmap -sT -Pn -n -p 22,80,443 192.168.1.28'
       : '--timeout 120 hydra -l root -p vnpt@123 -t 1 telnet://192.168.1.28';
@@ -392,6 +465,50 @@ function onModeChange() {
     btn.addEventListener('click', () => { $('#exec-args').value = p.args; });
     bar.appendChild(btn);
   });
+  if (cfgMode === 'per-device') {
+    UI.renderPerDeviceCameras(cameraStatus, binaryResults, '', mode);
+    renderPdPresets(mode);
+  }
+}
+
+function onExecConfigChange() {
+  const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
+  const mode = $('#exec-mode').value;
+  $('#exec-shared-config').hidden = cfgMode !== 'all';
+  $('#exec-per-device-config').hidden = cfgMode !== 'per-device';
+  if (mode === 'dos') {
+    $('#exec-target-wrap').hidden = cfgMode === 'per-device';
+  }
+  if (cfgMode === 'per-device') {
+    UI.renderPerDeviceCameras(cameraStatus, binaryResults, $('#exec-args').value, mode);
+    renderPdPresets(mode);
+  }
+}
+
+function renderPdPresets(mode) {
+  const bar = $('#exec-pd-presets');
+  if (!bar) return;
+  bar.innerHTML = '';
+  if (mode === 'dos') {
+    const fillBtn = document.createElement('button');
+    fillBtn.type = 'button';
+    fillBtn.className = 'preset-btn preset-fill';
+    fillBtn.textContent = '⬇ Fill Target IP';
+    fillBtn.title = 'Điền Target IP cho tất cả từ ô nhập bên dưới';
+    fillBtn.addEventListener('click', () => {
+      const t = prompt('Target IP cho tất cả camera (RFC1918):');
+      if (t) UI.fillAllPerDeviceTargets(t.trim());
+    });
+    bar.appendChild(fillBtn);
+  }
+  (PRESETS[mode] || []).forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'preset-btn';
+    btn.textContent = p.label;
+    btn.addEventListener('click', () => { UI.fillAllPerDeviceArgs(p.args); });
+    bar.appendChild(btn);
+  });
 }
 
 async function onExec() {
@@ -399,14 +516,53 @@ async function onExec() {
   if (!guardBtn('exec', btn)) return;
   const mode = $('#exec-mode').value;
   const target = $('#exec-target').value.trim();
-  const args = $('#exec-args').value.trim();
+  const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
 
-  if (mode === 'dos') {
+  if (mode === 'dos' && cfgMode !== 'per-device') {
     if (!target || !isPrivateIPv4(target)) {
       UI.appendLog('exec', 'error', 'IP mục tiêu không hợp lệ hoặc ngoài RFC1918');
       releaseBtn('exec', btn); return;
     }
   }
+
+  if (cfgMode === 'per-device') {
+    const perDevice = UI.getPerDeviceConfigs();
+    if (perDevice.length === 0) {
+      UI.appendLog('exec', 'error', 'Chưa có camera nào trong danh sách');
+      releaseBtn('exec', btn); return;
+    }
+    const noArgs = perDevice.filter(d => !d.args);
+    if (noArgs.length > 0) {
+      UI.appendLog('exec', 'error', `Camera ${noArgs.map(d => d.ip).join(', ')} chưa có tham số`);
+      releaseBtn('exec', btn); return;
+    }
+    if (mode === 'dos') {
+      const noTarget = perDevice.filter(d => !d.target_ip || !isPrivateIPv4(d.target_ip));
+      if (noTarget.length > 0) {
+        UI.appendLog('exec', 'error', `Camera ${noTarget.map(d => d.ip).join(', ')} chưa có Target IP hợp lệ (RFC1918)`);
+        releaseBtn('exec', btn); return;
+      }
+    }
+    const modeLabel = mode === 'dos' ? 'camera_dos' : 'camera-tools';
+    UI.appendLog('exec', 'warn', `Chạy ${modeLabel} trên ${perDevice.length} camera (per-device config)`);
+    try {
+      const result = await client.exec(null, '', '', mode, 0, perDevice);
+      const failed = (result.results || []).filter(item => !item.ok);
+      failed.forEach(item => UI.appendLog('exec', 'error', `${item.ip}: ${item.msg}`));
+      if (result.accepted && (result.results || []).some(item => item.ok)) {
+        UI.showMonitorPanel(true);
+      }
+    } catch (e) {
+      UI.appendLog('exec', 'error', e.message || String(e));
+    } finally {
+      releaseBtn('exec', btn);
+    }
+    return;
+  }
+
+  const args = $('#exec-args').value.trim();
+  const duration = parseInt($('#exec-duration').value) || 0;
+
   if (!args) {
     UI.appendLog('exec', 'error', 'Chưa nhập tham số lệnh');
     releaseBtn('exec', btn); return;
@@ -416,9 +572,10 @@ async function onExec() {
   const ips = selectedIPs.length > 0 ? selectedIPs : null;
   const label = ips ? `${ips.length} camera đã chọn` : 'tất cả camera';
   const modeLabel = mode === 'dos' ? 'camera_dos' : 'camera-tools';
-  UI.appendLog('exec', 'warn', `Chạy ${modeLabel} trên ${label} → ${mode === 'dos' ? target + ' ' : ''}${args}`);
+  const durLabel = duration > 0 ? ` (${duration}s)` : '';
+  UI.appendLog('exec', 'warn', `Chạy ${modeLabel} trên ${label}${durLabel} → ${mode === 'dos' ? target + ' ' : ''}${args}`);
   try {
-    const result = await client.exec(ips, target, args, mode);
+    const result = await client.exec(ips, target, args, mode, duration);
     const failed = (result.results || []).filter(item => !item.ok);
     failed.forEach(item => UI.appendLog('exec', 'error', `${item.ip}: ${item.msg}`));
     if (result.accepted && (result.results || []).some(item => item.ok)) {
@@ -469,21 +626,25 @@ function onTableClick(e) {
   if (btn.classList.contains('del-bin')) {
     btn.disabled = true;
     const ip = btn.dataset.ip;
+    UI.showBinaryToast(`Đang xóa camera_dos trên ${ip}…`);
     client.deleteBinary([ip], 'camera_dos').then(() => onCheckBinary()).finally(() => { btn.disabled = false; });
   }
   if (btn.classList.contains('deploy-bin')) {
     btn.disabled = true;
     const ip = btn.dataset.ip;
+    UI.showBinaryToast(`Đang deploy camera_dos lên ${ip}…`);
     client.deploy([ip], 'camera_dos').then(() => setTimeout(onCheckBinary, 2000)).finally(() => { btn.disabled = false; });
   }
   if (btn.classList.contains('del-tools')) {
     btn.disabled = true;
     const ip = btn.dataset.ip;
+    UI.showBinaryToast(`Đang xóa camera-tools trên ${ip}…`);
     client.deleteTools([ip]).then(() => onCheckBinary()).finally(() => { btn.disabled = false; });
   }
   if (btn.classList.contains('deploy-tools')) {
     btn.disabled = true;
     const ip = btn.dataset.ip;
+    UI.showBinaryToast(`Đang deploy camera-tools lên ${ip}…`);
     client.deployTools([ip]).then(() => setTimeout(onCheckBinary, 3000)).finally(() => { btn.disabled = false; });
   }
   if (btn.classList.contains('del-cred')) {
@@ -498,11 +659,13 @@ function onTableClick(e) {
 // ---------------------------------------------------------------- status polling
 async function loadStatus() {
   try {
-    const r = await client.status();
+    const [r, dl] = await Promise.all([client.status(), client.deviceLocks()]);
     cameraStatus = r.cameras || {};
+    deviceLocks = dl.locks || {};
+    const me = dl.me || currentUser;
     UI.updateCamCount(r.connected_count || 0);
     UI.renderBinaryStatus(binaryResults, cameraStatus);
-    UI.renderExecCameras(cameraStatus, binaryResults);
+    UI.renderExecCameras(cameraStatus, binaryResults, deviceLocks, me);
   } catch {}
 }
 

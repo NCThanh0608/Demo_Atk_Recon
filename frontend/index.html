@@ -67,6 +67,7 @@
           <button class="btn btn-accent" id="scan-btn" type="button">Quét</button>
           <button class="btn btn-muted" id="scan-stop" type="button" hidden>Dừng</button>
         </div>
+        <div id="scan-toast" class="binary-toast" hidden></div>
         <div id="scan-results" hidden>
           <table class="rtable">
             <thead><tr><th><input type="checkbox" id="select-all"></th><th>IP</th><th>Hostname</th><th>MAC</th><th>Vendor</th><th>RTT</th></tr></thead>
@@ -108,6 +109,7 @@
           <button class="btn btn-accent" id="connect-btn" type="button">Kết nối</button>
           <button class="btn btn-crit" id="disconnect-btn" type="button">Ngắt tất cả</button>
         </div>
+        <div id="connect-toast" class="binary-toast" hidden></div>
       </div>
     </section>
 
@@ -125,7 +127,7 @@
           <thead><tr><th>Camera IP</th><th>Trạng thái</th><th>camera_dos</th><th>camera-tools</th><th>Hành động</th></tr></thead>
           <tbody id="binary-body"></tbody>
         </table>
-        <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+        <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
           <select class="inp" id="deploy-target" style="max-width:200px;padding:8px 10px">
             <option value="camera_dos">camera_dos (DoS)</option>
             <option value="camera-tools">camera-tools (Recon)</option>
@@ -134,6 +136,7 @@
           <button class="btn btn-accent" id="deploy-all-btn" type="button">Deploy</button>
           <button class="btn btn-crit" id="delete-all-btn" type="button">Xóa</button>
         </div>
+        <div id="binary-toast" class="binary-toast" hidden></div>
       </div>
     </section>
 
@@ -167,14 +170,39 @@
             <input class="inp mono" id="exec-target" placeholder="10.20.0.2" spellcheck="false">
           </div>
         </div>
-        <div class="row" style="margin-top:8px">
-          <div class="fld grow">
-            <label for="exec-args">Tham số</label>
-            <input class="inp mono" id="exec-args" placeholder="--udp-flood --udp-threads 10 --udp-rate 0 --udp-port 514" spellcheck="false">
+        <!-- Config mode toggle: all same vs per-device -->
+        <div class="exec-config-toggle" style="margin-top:10px">
+          <label class="radio-label"><input type="radio" name="exec-config" value="all" checked> Chung cho tất cả</label>
+          <label class="radio-label"><input type="radio" name="exec-config" value="per-device"> Riêng từng device</label>
+        </div>
+
+        <!-- Shared config (all cameras same duration + args) -->
+        <div id="exec-shared-config">
+          <div class="row" style="margin-top:8px">
+            <div class="fld" style="width:160px">
+              <label for="exec-duration">Thời gian (giây)</label>
+              <input class="inp mono" id="exec-duration" type="number" placeholder="0 = vô hạn" min="0">
+            </div>
+            <div class="fld grow">
+              <label for="exec-args">Tham số</label>
+              <input class="inp mono" id="exec-args" placeholder="--udp-flood --udp-threads 10 --udp-rate 0 --udp-port 514" spellcheck="false">
+            </div>
+          </div>
+          <div id="exec-presets" class="preset-bar" style="margin-top:8px">
+            <!-- filled by JS -->
           </div>
         </div>
-        <div id="exec-presets" class="preset-bar" style="margin-top:8px">
-          <!-- filled by JS -->
+
+        <!-- Per-device config (each camera has own duration + args) -->
+        <div id="exec-per-device-config" hidden>
+          <div id="exec-pd-presets" class="preset-bar" style="margin-top:8px">
+            <!-- filled by JS -->
+          </div>
+          <table class="rtable" style="margin-top:8px">
+            <thead><tr><th>Camera IP</th><th style="width:120px">Thời gian (s)</th><th>Tham số</th></tr></thead>
+            <tbody id="exec-pd-body"><!-- filled by JS --></tbody>
+          </table>
+          <p class="hint" style="margin-top:4px">Mỗi camera có thời gian và tham số riêng. 0 hoặc trống = không giới hạn. Click preset để áp dụng cho tất cả.</p>
         </div>
         <div class="row" style="margin-top:10px">
           <button class="btn btn-warn" id="exec-btn" type="button">Chạy</button>
@@ -186,7 +214,6 @@
           <div class="monitor-header">
             <span class="monitor-dot"></span>
             <span class="monitor-title">Live Monitoring</span>
-            <span class="monitor-elapsed" id="monitor-elapsed">0s</span>
           </div>
           <div id="monitor-cards" class="monitor-cards">
             <!-- filled by JS -->
@@ -198,13 +225,14 @@
     <!-- Credential Database -->
     <section class="card" id="db-section">
       <div class="card-h">
-        <h2>
+        <h2 style="cursor:pointer" id="db-toggle">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
           Database Credentials
+          <span class="collapse-arrow collapsed" id="db-arrow">▾</span>
         </h2>
         <button class="btn btn-sm" id="db-refresh" type="button">Tải lại</button>
       </div>
-      <div class="card-body">
+      <div class="card-body collapsed-body" id="db-body-wrap">
         <table class="rtable">
           <thead><tr><th>IP</th><th>Username</th><th>Password</th><th>Label</th><th>Group</th><th>Lần cuối</th><th>Ghi chú</th><th></th></tr></thead>
           <tbody id="db-body"></tbody>
@@ -218,10 +246,10 @@
     <!-- Activity Log -->
     <section class="card">
       <div class="card-h">
-        <h2>Nhật ký hoạt động</h2>
+        <h2 style="cursor:pointer" id="log-toggle">Nhật ký hoạt động <span class="collapse-arrow collapsed" id="log-arrow">▾</span></h2>
         <button class="btn btn-sm" id="log-clear" type="button">Xóa</button>
       </div>
-      <div class="console" id="console" aria-live="polite"></div>
+      <div class="console collapsed-body" id="console" aria-live="polite"></div>
     </section>
   </div><!-- end .shell -->
 

