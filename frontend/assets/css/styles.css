@@ -96,8 +96,6 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .preset-btn{cursor:pointer;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
   padding:4px 10px;font-family:var(--mono);font-size:.7rem;color:var(--muted);white-space:nowrap;transition:all .15s}
 .preset-btn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
-.preset-fill{color:var(--warn);border-color:var(--warn)}
-.preset-fill:hover{background:color-mix(in srgb,var(--warn) 12%,transparent)}
 
 /* card (sections) */
 .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
@@ -181,6 +179,7 @@ h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
 .exec-config-toggle{display:flex;gap:16px;flex-wrap:wrap}
 #exec-per-device-config .rtable .inp{width:100%;box-sizing:border-box}
 #exec-per-device-config .rtable td:first-child{white-space:nowrap}
+#exec-per-device-config .rtable tr.pd-active{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-soft)}
 
 /* exec monitor panel */
 .monitor-panel{margin-top:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);overflow:hidden}

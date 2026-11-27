@@ -133,7 +133,7 @@ async function init() {
       onModeChange();
       const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
       if (cfgMode === 'per-device') {
-        UI.fillAllPerDeviceArgs(cmd);
+        UI.fillPerDeviceArgs(cmd);
       } else {
         $('#exec-args').value = cmd;
       }
@@ -443,7 +443,7 @@ function onModeChange() {
   const mode = $('#exec-mode').value;
   const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
   const targetWrap = $('#exec-target-wrap');
-  if (mode === 'dos' && cfgMode !== 'per-device') {
+  if (mode === 'dos') {
     targetWrap.hidden = false;
   } else {
     targetWrap.hidden = true;
@@ -476,9 +476,6 @@ function onExecConfigChange() {
   const mode = $('#exec-mode').value;
   $('#exec-shared-config').hidden = cfgMode !== 'all';
   $('#exec-per-device-config').hidden = cfgMode !== 'per-device';
-  if (mode === 'dos') {
-    $('#exec-target-wrap').hidden = cfgMode === 'per-device';
-  }
   if (cfgMode === 'per-device') {
     UI.renderPerDeviceCameras(cameraStatus, binaryResults, $('#exec-args').value, mode);
     renderPdPresets(mode);
@@ -489,24 +486,12 @@ function renderPdPresets(mode) {
   const bar = $('#exec-pd-presets');
   if (!bar) return;
   bar.innerHTML = '';
-  if (mode === 'dos') {
-    const fillBtn = document.createElement('button');
-    fillBtn.type = 'button';
-    fillBtn.className = 'preset-btn preset-fill';
-    fillBtn.textContent = '⬇ Fill Target IP';
-    fillBtn.title = 'Điền Target IP cho tất cả từ ô nhập bên dưới';
-    fillBtn.addEventListener('click', () => {
-      const t = prompt('Target IP cho tất cả camera (RFC1918):');
-      if (t) UI.fillAllPerDeviceTargets(t.trim());
-    });
-    bar.appendChild(fillBtn);
-  }
   (PRESETS[mode] || []).forEach(p => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'preset-btn';
     btn.textContent = p.label;
-    btn.addEventListener('click', () => { UI.fillAllPerDeviceArgs(p.args); });
+    btn.addEventListener('click', () => { UI.fillPerDeviceArgs(p.args); });
     bar.appendChild(btn);
   });
 }
@@ -518,7 +503,7 @@ async function onExec() {
   const target = $('#exec-target').value.trim();
   const cfgMode = document.querySelector('input[name="exec-config"]:checked')?.value;
 
-  if (mode === 'dos' && cfgMode !== 'per-device') {
+  if (mode === 'dos') {
     if (!target || !isPrivateIPv4(target)) {
       UI.appendLog('exec', 'error', 'IP mục tiêu không hợp lệ hoặc ngoài RFC1918');
       releaseBtn('exec', btn); return;
@@ -536,17 +521,10 @@ async function onExec() {
       UI.appendLog('exec', 'error', `Camera ${noArgs.map(d => d.ip).join(', ')} chưa có tham số`);
       releaseBtn('exec', btn); return;
     }
-    if (mode === 'dos') {
-      const noTarget = perDevice.filter(d => !d.target_ip || !isPrivateIPv4(d.target_ip));
-      if (noTarget.length > 0) {
-        UI.appendLog('exec', 'error', `Camera ${noTarget.map(d => d.ip).join(', ')} chưa có Target IP hợp lệ (RFC1918)`);
-        releaseBtn('exec', btn); return;
-      }
-    }
     const modeLabel = mode === 'dos' ? 'camera_dos' : 'camera-tools';
     UI.appendLog('exec', 'warn', `Chạy ${modeLabel} trên ${perDevice.length} camera (per-device config)`);
     try {
-      const result = await client.exec(null, '', '', mode, 0, perDevice);
+      const result = await client.exec(null, target, '', mode, 0, perDevice);
       const failed = (result.results || []).filter(item => !item.ok);
       failed.forEach(item => UI.appendLog('exec', 'error', `${item.ip}: ${item.msg}`));
       if (result.accepted && (result.results || []).some(item => item.ok)) {

@@ -925,6 +925,10 @@ class Engine:
         return 200, {"accepted": True, "results": results}
 
     def exec_per_device(self, devices, target_ip, mode="dos"):
+        if mode == "dos":
+            if not valid_ipv4(target_ip) or not is_private_ipv4(target_ip):
+                return 403, {"error": f"Mục tiêu {target_ip} ngoài RFC1918"}
+
         results = []
         all_ips = []
 
@@ -935,11 +939,7 @@ class Engine:
             timeout_prefix = f"timeout {dur} " if dur > 0 else ""
 
             if mode == "dos":
-                dev_target = (dev.get("target_ip", "") or target_ip or "").strip()
-                if not valid_ipv4(dev_target) or not is_private_ipv4(dev_target):
-                    results.append({"ip": ip, "ok": False, "msg": f"Mục tiêu {dev_target} ngoài RFC1918"})
-                    return
-                cmd = f"/tmp/camera_dos {dev_target} {args}".strip()
+                cmd = f"/tmp/camera_dos {target_ip} {args}".strip()
                 bg_cmd = f"killall camera_dos 2>/dev/null; rm -f /tmp/camdos.log; {timeout_prefix}{cmd} > /tmp/camdos.log 2>&1 &"
             else:
                 cmd = f"/tmp/camera-tools/cam-run --root /tmp/camera-tools {args}".strip()
@@ -1428,7 +1428,7 @@ class Handler(SimpleHTTPRequestHandler):
             target_ip = (body.get("target_ip") or "").strip()
             mode = (body.get("mode") or "dos").strip()
             per_device = body.get("per_device")
-            if mode == "dos" and not per_device and not target_ip:
+            if mode == "dos" and not target_ip:
                 return self._json(400, {"error": "Thiếu target_ip"})
             if per_device:
                 code, resp = engine.exec_per_device(per_device, target_ip, mode=mode)

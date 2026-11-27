@@ -430,22 +430,12 @@ const PD_PLACEHOLDERS = {
 
 export function renderPerDeviceCameras(cameraStatus, binaryResults, defaultArgs, mode) {
   const tbody = $('#exec-pd-body');
-  const thead = tbody?.closest('table')?.querySelector('thead');
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  const isDos = mode === 'dos';
-  const colCount = isDos ? 4 : 3;
-
-  if (thead) {
-    thead.innerHTML = isDos
-      ? '<tr><th>Camera IP</th><th style="width:130px">Target IP</th><th style="width:100px">Thời gian (s)</th><th>Tham số</th></tr>'
-      : '<tr><th>Camera IP</th><th style="width:120px">Thời gian (s)</th><th>Tham số</th></tr>';
-  }
-
   const connectedIPs = Object.keys(cameraStatus || {});
   if (connectedIPs.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;opacity:.5">Chưa có camera nào kết nối</td></tr>`;
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;opacity:.5">Chưa có camera nào kết nối</td></tr>';
     return;
   }
 
@@ -455,20 +445,25 @@ export function renderPerDeviceCameras(cameraStatus, binaryResults, defaultArgs,
 
   ips.forEach(ip => {
     const tr = document.createElement('tr');
-    const targetCol = isDos
-      ? `<td><input class="inp mono sm pd-target" data-ip="${escapeHtml(ip)}" placeholder="10.20.0.2" spellcheck="false"></td>`
-      : '';
     tr.innerHTML = `
       <td class="ip-cell">${escapeHtml(ip)}</td>
-      ${targetCol}
       <td><input class="inp mono sm pd-duration" data-ip="${escapeHtml(ip)}" type="number" value="" min="0" placeholder="0"></td>
       <td><input class="inp mono sm pd-args" data-ip="${escapeHtml(ip)}" value="${escapeHtml(defaultArgs || '')}" placeholder="${escapeHtml(ph)}"></td>`;
+    tr.addEventListener('click', () => {
+      $$('#exec-pd-body tr.pd-active').forEach(r => r.classList.remove('pd-active'));
+      tr.classList.add('pd-active');
+    });
     tbody.appendChild(tr);
   });
 }
 
-export function fillAllPerDeviceArgs(args) {
-  $$('.pd-args').forEach(el => { el.value = args; });
+export function fillPerDeviceArgs(args) {
+  const active = document.querySelector('#exec-pd-body tr.pd-active .pd-args');
+  if (active) {
+    active.value = args;
+  } else {
+    $$('.pd-args').forEach(el => { el.value = args; });
+  }
 }
 
 export function getPerDeviceConfigs() {
@@ -476,22 +471,15 @@ export function getPerDeviceConfigs() {
   $$('#exec-pd-body tr').forEach(tr => {
     const durInput = tr.querySelector('.pd-duration');
     const argsInput = tr.querySelector('.pd-args');
-    const targetInput = tr.querySelector('.pd-target');
     if (durInput && argsInput) {
-      const cfg = {
+      configs.push({
         ip: durInput.dataset.ip,
         duration: parseInt(durInput.value) || 0,
         args: argsInput.value.trim()
-      };
-      if (targetInput) cfg.target_ip = targetInput.value.trim();
-      configs.push(cfg);
+      });
     }
   });
   return configs;
-}
-
-export function fillAllPerDeviceTargets(target) {
-  $$('.pd-target').forEach(el => { el.value = target; });
 }
 
 // ---------------------------------------------------------------- add cred dialog
